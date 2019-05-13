@@ -61,11 +61,6 @@ genquery(
 # Create dummy tools so we can do select to prevent building iOS target on
 # Linux.
 OSX_DUMMY_TARGETS = [
-    "src/tools/xcode/actoolwrapper/actoolwrapper.sh",
-    "src/tools/xcode/ibtoolwrapper/ibtoolwrapper.sh",
-    "src/tools/xcode/momcwrapper/momcwrapper.sh",
-    "src/objc_tools/bundlemerge/bundlemerge_deploy.jar",
-    "src/objc_tools/plmerge/plmerge_deploy.jar",
     "src/tools/xcode/realpath/realpath",
     "src/tools/xcode/stdredirect/StdRedirect.dylib",
 ]
@@ -83,11 +78,6 @@ OSX_DUMMY_TARGETS = [
 filegroup(
     name = "darwin_tools",
     srcs = [
-        "//src/tools/xcode/actoolwrapper:actoolwrapper.sh",
-        "//src/tools/xcode/ibtoolwrapper:ibtoolwrapper.sh",
-        "//src/tools/xcode/momcwrapper:momcwrapper.sh",
-        "//src/objc_tools/bundlemerge:bundlemerge_deploy.jar",
-        "//src/objc_tools/plmerge:plmerge_deploy.jar",
         "//src/tools/xcode/realpath:realpath",
         "//tools/osx:xcode_locator.m",
     ] + select({
@@ -454,8 +444,6 @@ filegroup(
         "//src/main/native:srcs",
         "//src/main/protobuf:srcs",
         "//src/main/tools:srcs",
-        "//src/objc_tools/bundlemerge:srcs",
-        "//src/objc_tools/plmerge:srcs",
         "//src/test/cpp:srcs",
         "//src/test/gen:srcs",
         "//src/test/native:srcs",
@@ -478,13 +466,9 @@ filegroup(
         "//src/tools/skylark/java/com/google/devtools/skylark/common:srcs",
         "//src/tools/skylark/java/com/google/devtools/skylark/skylint:srcs",
         "//src/tools/skylark/javatests/com/google/devtools/skylark/skylint:srcs",
-        "//src/tools/xcode/actoolwrapper:srcs",
-        "//src/tools/xcode/ibtoolwrapper:srcs",
-        "//src/tools/xcode/momcwrapper:srcs",
         "//src/tools/xcode/realpath:srcs",
         "//src/tools/singlejar:srcs",
         "//src/tools/xcode/stdredirect:srcs",
-        "//src/tools/xcode-common:srcs",
         "//src/tools/remote:srcs",
         "//tools/osx:srcs",
     ],
@@ -572,31 +556,22 @@ JAVA_TOOLS_DEPLOY_JARS = [
     "//conditions:default": [],
 })
 
-genrule(
-    name = "jars_java_tools_java9_zip",
-    srcs = JAVA_TOOLS_DEPLOY_JARS + [
-        "@java_tools_langtools_javac9//:jdk_compiler_jar",
-        "@java_tools_langtools_javac9//:java_compiler_jar",
-        "@java_tools_langtools_javac9//:javac_jar",
-    ],
-    outs = ["jars_java_tools_java9.zip"],
-    cmd = "zip -qjX $@ $$(echo $(SRCS) | sort)",
-    visibility = ["//visibility:private"],
-)
+JAVA_VERSIONS = ("9", "10", "11")
 
-genrule(
-    name = "jars_java_tools_java10_zip",
-    srcs = JAVA_TOOLS_DEPLOY_JARS + [
-        "@java_tools_langtools_javac10//:jdk_compiler_jar",
-        "@java_tools_langtools_javac10//:java_compiler_jar",
-        "@java_tools_langtools_javac10//:javac_jar",
-    ],
-    outs = ["jars_java_tools_java10.zip"],
-    cmd = "zip -qjX $@ $$(echo $(SRCS) | sort)",
-    visibility = ["//visibility:private"],
-)
-
-JAVA_VERSIONS = ("9", "10")
+[
+    genrule(
+        name = "jars_java_tools_java" + java_version + "_zip",
+        srcs = JAVA_TOOLS_DEPLOY_JARS + [
+            "@java_tools_langtools_javac" + java_version + "//:jdk_compiler_jar",
+            "@java_tools_langtools_javac" + java_version + "//:java_compiler_jar",
+            "@java_tools_langtools_javac" + java_version + "//:javac_jar",
+        ],
+        outs = ["jars_java_tools_java" + java_version + ".zip"],
+        cmd = "zip -qjX $@ $$(echo $(SRCS) | sort)",
+        visibility = ["//visibility:private"],
+    )
+    for java_version in JAVA_VERSIONS
+]
 
 [
     genrule(
@@ -611,6 +586,7 @@ JAVA_VERSIONS = ("9", "10")
             "//third_party/jarjar:srcs",
             "//third_party/ijar:transitive_sources",
             "//third_party/java/jacoco:jacoco_source_jars_zip",
+            "//third_party/java/proguard:proguard_srcs_zip",
             "@java_tools_langtools_javac" + java_version + "//:srcs",
         ],
         outs = ["java_tools_dist_javac" + java_version + ".zip"],
@@ -671,6 +647,7 @@ genrule(
             "//src/tools/singlejar:singlejar_transitive_zip",
             "//third_party/ijar:ijar_transitive_zip",
             "//third_party/java/jacoco:jacoco_jars_zip",
+            "//third_party/java/proguard:proguard_zip",
         ],
         outs = ["java_tools_java" + java_version + "_no_build.zip"],
         cmd = "$(location //src:merge_zip_files) java_tools $@ $(SRCS)",
@@ -704,8 +681,6 @@ genrule(
         name = "upload_java_tools_java" + java_version,
         srcs = ["upload_java_tools.sh"],
         args = [
-            "--java_tools_zip",
-            "src/java_tools_java" + java_version + ".zip",
             "--gcs_java_tools_dir",
             "tmp/build",
             "--java_version",

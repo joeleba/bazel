@@ -45,10 +45,10 @@ import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionMiddlemanEvent;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.ActionResultReceivedEvent;
+import com.google.devtools.build.lib.actions.ActionScanningCompletedEvent;
 import com.google.devtools.build.lib.actions.ActionStartedEvent;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
-import com.google.devtools.build.lib.actions.AnalyzingActionEvent;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpanderImpl;
 import com.google.devtools.build.lib.actions.Artifact.OwnerlessArtifactWrapper;
@@ -69,6 +69,7 @@ import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictEx
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit;
 import com.google.devtools.build.lib.actions.NotifyOnActionCacheHit.ActionCachedContext;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
+import com.google.devtools.build.lib.actions.ScanningActionEvent;
 import com.google.devtools.build.lib.actions.TargetOutOfDateException;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
@@ -87,6 +88,7 @@ import com.google.devtools.build.lib.rules.cpp.IncludeScannable;
 import com.google.devtools.build.lib.runtime.KeepGoingOption;
 import com.google.devtools.build.lib.skyframe.ActionExecutionState.ActionStep;
 import com.google.devtools.build.lib.skyframe.ActionExecutionState.ActionStepOrResult;
+import com.google.devtools.build.lib.skyframe.ActionExecutionState.SharedActionCallback;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -245,8 +247,24 @@ public final class SkyframeActionExecutor {
     }
   }
 
-  ActionCompletedReceiver getActionCompletedReceiver() {
-    return completionReceiver;
+  SharedActionCallback getSharedActionCallback(
+      ExtendedEventHandler eventHandler,
+      boolean hasDiscoveredInputs,
+      Action action,
+      ActionLookupData actionLookupData) {
+    return new SharedActionCallback() {
+      @Override
+      public void actionStarted() {
+        if (hasDiscoveredInputs) {
+          eventHandler.post(new ActionScanningCompletedEvent(action, actionLookupData));
+        }
+      }
+
+      @Override
+      public void actionCompleted() {
+        completionReceiver.actionCompleted(actionLookupData);
+      }
+    };
   }
 
   /**
@@ -524,7 +542,8 @@ public final class SkyframeActionExecutor {
       long actionStartTime,
       ActionExecutionContext actionExecutionContext,
       ActionLookupData actionLookupData,
-      ActionPostprocessing postprocessing)
+      ActionPostprocessing postprocessing,
+      boolean hasDiscoveredInputs)
       throws ActionExecutionException, InterruptedException {
     // ActionExecutionFunction may directly call into ActionExecutionState.getResultOrDependOnFuture
     // if a shared action already passed these checks.
@@ -560,7 +579,10 @@ public final class SkyframeActionExecutor {
                         actionLookupData,
                         postprocessing)));
     return activeAction.getResultOrDependOnFuture(
-        env, actionLookupData, action, completionReceiver);
+        env,
+        actionLookupData,
+        action,
+        getSharedActionCallback(env.getListener(), hasDiscoveredInputs, action, actionLookupData));
   }
 
   private ExtendedEventHandler selectEventHandler(ProgressEventBehavior progressEventBehavior) {
@@ -724,7 +746,7 @@ public final class SkyframeActionExecutor {
       // streams is sufficient.
       setupActionFsFileOutErr(actionExecutionContext.getFileOutErr(), action);
     }
-    actionExecutionContext.getEventHandler().post(new AnalyzingActionEvent(action));
+    actionExecutionContext.getEventHandler().post(new ScanningActionEvent(action));
     try {
       return action.discoverInputs(actionExecutionContext);
     } catch (ActionExecutionException e) {

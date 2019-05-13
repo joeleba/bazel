@@ -59,9 +59,10 @@ JAVA_TOOLCHAIN="$1"; shift
 add_to_bazelrc "build --java_toolchain=${JAVA_TOOLCHAIN}"
 
 JAVA_TOOLS_ZIP="$1"; shift
-
 if [[ "${JAVA_TOOLS_ZIP}" != "released" ]]; then
-    if "$is_windows"; then
+    if [[ "${JAVA_TOOLS_ZIP}" == file* ]]; then
+        JAVA_TOOLS_ZIP_FILE_URL="${JAVA_TOOLS_ZIP}"
+    elif "$is_windows"; then
         JAVA_TOOLS_ZIP_FILE_URL="file:///$(rlocation io_bazel/$JAVA_TOOLS_ZIP)"
     else
         JAVA_TOOLS_ZIP_FILE_URL="file://$(rlocation io_bazel/$JAVA_TOOLS_ZIP)"
@@ -164,6 +165,33 @@ http_archive(
     strip_prefix = "zulu10.2+3-jdk10.0.1-win_x64",
     urls = [
         "https://mirror.bazel.build/openjdk/azul-zulu10.2+3-jdk10.0.1/zulu10.2+3-jdk10.0.1-win_x64.zip",
+    ],
+)
+
+http_archive(
+    name = "openjdk11_linux_archive",
+    build_file_content = "java_runtime(name = 'runtime', srcs =  glob(['**']), visibility = ['//visibility:public'])",
+    strip_prefix = "zulu11.31.11-ca-jdk11.0.3-linux_x64",
+    urls = [
+        "https://mirror.bazel.build/openjdk/azul-zulu11.31.11-ca-jdk11.0.3/zulu11.31.11-ca-jdk11.0.3-linux_x64.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "openjdk11_darwin_archive",
+    build_file_content = "java_runtime(name = 'runtime', srcs =  glob(['**']), visibility = ['//visibility:public'])",
+    strip_prefix = "zulu11.31.11-ca-jdk11.0.3-macosx_x64",
+    urls = [
+        "https://mirror.bazel.build/openjdk/azul-zulu11.31.11-ca-jdk11.0.3/zulu11.31.11-ca-jdk11.0.3-macosx_x64.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "openjdk11_windows_archive",
+    build_file_content = "java_runtime(name = 'runtime', srcs =  glob(['**']), visibility = ['//visibility:public'])",
+    strip_prefix = "zulu11.31.11-ca-jdk11.0.3-win_x64",
+    urls = [
+        "https://mirror.bazel.build/openjdk/azul-zulu11.31.11-ca-jdk11.0.3/zulu11.31.11-ca-jdk11.0.3-win_x64.zip",
     ],
 )
 EOF
@@ -389,15 +417,6 @@ function test_strategy_picks_first_preferred_local() {
     --spawn_strategy=local,worker &> $TEST_log || fail "build failed"
   expect_not_log " processes: .*worker"
   expect_log " processes: .*local"
-}
-
-# This test builds a simple java deploy jar using remote singlejar and ijar
-# targets which compile them from source.
-function test_build_hello_world_with_remote_embedded_tool_targets() {
-  write_hello_library_files
-
-  bazel build //java/main:main_deploy.jar --define EXECUTOR=remote \
-    &> $TEST_log || fail "build failed"
 }
 
 # This test verifies that jars named by deploy_env are excluded from the final
