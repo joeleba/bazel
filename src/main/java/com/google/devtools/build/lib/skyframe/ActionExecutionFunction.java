@@ -392,12 +392,13 @@ public class ActionExecutionFunction implements SkyFunction {
    */
   private static boolean evalInputsAsNestedSet(
       int nestedSetSizeThreshold, NestedSet<Artifact> inputs) {
-    if (nestedSetSizeThreshold == 1) {
-      // Don't even flatten in this case.
-      return true;
-    }
-    return nestedSetSizeThreshold > 0
-        && (inputs.memoizedFlattenAndGetSize() >= nestedSetSizeThreshold);
+    return true;
+   // if (nestedSetSizeThreshold == 1) {
+   //   // Don't even flatten in this case.
+   //   return true;
+   // }
+   // return nestedSetSizeThreshold > 0
+   //     && (inputs.memoizedFlattenAndGetSize() >= nestedSetSizeThreshold);
   }
 
   private Environment getProgressEventSuppressingEnvironmentIfPreviouslyCompleted(
