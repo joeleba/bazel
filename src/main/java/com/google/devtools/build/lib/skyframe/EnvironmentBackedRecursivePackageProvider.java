@@ -21,8 +21,8 @@ import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
+import com.google.devtools.build.lib.concurrent.BatchCallback;
 import com.google.devtools.build.lib.concurrent.ParallelVisitor.UnusedException;
-import com.google.devtools.build.lib.concurrent.ThreadSafeBatchCallback;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
@@ -30,7 +30,6 @@ import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.pkgcache.AbstractRecursivePackageProvider;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
-import com.google.devtools.build.lib.pkgcache.RecursivePackageProvider;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
@@ -43,9 +42,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * A {@link RecursivePackageProvider} backed by an {@link Environment}. Its methods may throw {@link
- * MissingDepException} if the package values this depends on haven't been calculated and added to
- * its environment.
+ * A {@link com.google.devtools.build.lib.pkgcache.RecursivePackageProvider} backed by an {@link
+ * Environment}. Its methods may throw {@link MissingDepException} if the package values this
+ * depends on haven't been calculated and added to its environment.
  *
  * <p>This implementation never emits events through the {@link ExtendedEventHandler}s passed to its
  * methods. Instead, it emits events through its environment's {@link Environment#getListener()}.
@@ -62,8 +61,9 @@ public final class EnvironmentBackedRecursivePackageProvider
 
   /**
    * Whether any of the calls to {@link #getPackage}, {@link #getTarget}, {@link #bulkGetPackages},
-   * or {@link RecursivePackageProvider#streamPackagesUnderDirectory} encountered a package in
-   * error.
+   * or {@link
+   * com.google.devtools.build.lib.pkgcache.RecursivePackageProvider#streamPackagesUnderDirectory}
+   * encountered a package in error.
    *
    * <p>The client of {@link EnvironmentBackedRecursivePackageProvider} may want to check this. See
    * comments in {@link #getPackage} for details.
@@ -142,11 +142,11 @@ public final class EnvironmentBackedRecursivePackageProvider
 
   @Override
   public void streamPackagesUnderDirectory(
-      ThreadSafeBatchCallback<PackageIdentifier, UnusedException> results,
+      BatchCallback<PackageIdentifier, UnusedException> results,
       ExtendedEventHandler eventHandler,
       RepositoryName repository,
       PathFragment directory,
-      ImmutableSet<PathFragment> blacklistedSubdirectories,
+      ImmutableSet<PathFragment> ignoredSubdirectories,
       ImmutableSet<PathFragment> excludedSubdirectories)
       throws MissingDepException, InterruptedException {
     PathPackageLocator packageLocator = PrecomputedValue.PATH_PACKAGE_LOCATOR.get(env);
@@ -171,13 +171,13 @@ public final class EnvironmentBackedRecursivePackageProvider
       roots.add(Root.fromPath(repositoryValue.getPath()));
     }
 
-    if (blacklistedSubdirectories.contains(directory)) {
+    if (ignoredSubdirectories.contains(directory)) {
       return;
     }
-    ImmutableSet<PathFragment> filteredBlacklistedSubdirectories =
+    ImmutableSet<PathFragment> filteredIgnoredSubdirectories =
         ImmutableSet.copyOf(
             Iterables.filter(
-                blacklistedSubdirectories,
+                ignoredSubdirectories,
                 path -> !path.equals(directory) && path.startsWith(directory)));
 
     for (Root root : roots) {
@@ -187,7 +187,7 @@ public final class EnvironmentBackedRecursivePackageProvider
                   RecursivePkgValue.key(
                       repository,
                       RootedPath.toRootedPath(root, directory),
-                      filteredBlacklistedSubdirectories));
+                      filteredIgnoredSubdirectories));
       if (lookup == null) {
         // Typically a null value from Environment.getValue(k) means that either the key k is
         // missing a dependency or an exception was thrown during evaluation of k. Here, if this

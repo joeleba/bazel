@@ -1,6 +1,6 @@
 ---
 layout: documentation
-title: External Dependencies
+title: External dependencies
 ---
 
 # Working with external dependencies
@@ -37,17 +37,12 @@ If `project1` wanted to depend on a target, `:foo`, defined in
 `/home/user/project1/BUILD` could depend on `@project2//:foo`.
 
 The `WORKSPACE` file allows users to depend on targets from other parts of the
-filesystem or downloaded from the internet. Users can also write custom
-[repository rules](skylark/repository_rules.html) to get more complex behavior.
-
-This `WORKSPACE` file uses the same syntax as BUILD files, but allows a
-different set of rules. The full list of built-in rules are in the Build
-Encyclopedia's [Workspace Rules](be/workspace.html) and the documentation
-for [Embedded Starlark Repository Rules](repo/index.html).
-
-Like in the [workspace directory](build-ref.html#workspace), Bazel also supports `WORKSPACE.bazel`
-file as an alias of `WORKSPACE` in external dependencies. If both files exist, `WORKSPACE.bazel`
-will take the priority.
+filesystem or downloaded from the internet. It uses the same syntax as BUILD
+files, but allows a different set of rules called _repository rules_ (sometimes
+also known as _workspace rules_). Bazel comes with a few [built-in repository
+rules](be/workspace.html) and a set of [embedded Starlark repository
+rules](repo/index.html). Users can also write [custom repository
+rules](skylark/repository_rules.html) to get more complex behavior.
 
 <a name="types"></a>
 ## Supported types of external dependencies
@@ -227,12 +222,62 @@ This mechanism can also be used to join diamonds. For example if `A` and `B`
 had the same dependency but call it by different names, those dependencies can
 be joined in myproject/WORKSPACE.
 
+## Overriding repositories from the command line
+
+To override a declared repository with a local repository from the command line,
+use the
+[`--override_repository`](command-line-reference.html#flag--override_repository)
+flag. Using this flag changes the contents of external repositories without
+changing your source code.
+
+For example, to override `@foo` to the local directory `/path/to/local/foo`,
+pass the `--override_repository=foo=/path/to/local/foo` flag.
+
+Some of the use cases include:
+
+* Debugging issues. For example, you can override a `http_archive` repository
+  to a local directory where you can make changes more easily.
+* Vendoring. If you are in an environment where you cannot make network calls,
+  override the network-based repository rules to point to local directories
+  instead.
 
 <a name="using-proxies"></a>
-## Using Proxies
+## Using proxies
 
 Bazel will pick up proxy addresses from the `HTTPS_PROXY` and `HTTP_PROXY`
 environment variables and use these to download HTTP/HTTPS files (if specified).
+
+<a name="support-for-ipv6"></a>
+## Support for IPv6
+On IPv6-only machines, Bazel will be able to download dependencies with
+no changes. On dual-stack IPv4/IPv6 machines, however, Bazel follows the same
+convention as Java: if IPv4 is enabled, IPv4 is preferred. In some situations,
+for example when IPv4 network is unable to resolve/reach external addresses,
+this can cause `Network unreachable` exceptions and build failures.
+In these cases, you can override Bazel's behavior to prefer IPv6
+by using [`java.net.preferIPv6Addresses=true` system property](https://docs.oracle.com/javase/8/docs/api/java/net/doc-files/net-properties.html).
+Specifically:
+
+* Use `--host_jvm_args=-Djava.net.preferIPv6Addresses=true`
+  [startup option](user-manual.html#startup_options),
+  for example by adding the following line in your
+  [`.bazelrc` file](guide.html#bazelrc):
+
+  `startup --host_jvm_args=-Djava.net.preferIPv6Addresses=true`
+
+* If you are running Java build targets that need to connect to the internet
+  as well (integration tests sometimes needs that), also use
+  `--jvmopt=-Djava.net.preferIPv6Addresses=true`
+  [tool flag](user-manual.html#flags-options), for example by having the
+  following line in your [`.bazelrc` file](guide.html#bazelrc):
+
+  `build --jvmopt=-Djava.net.preferIPv6Addresses`
+
+* If you are using
+  [rules_jvm_external](https://github.com/bazelbuild/rules_jvm_external),
+  for example, for dependency version resolution, also add
+  `-Djava.net.preferIPv6Addresses=true` to the `COURSIER_OPTS`
+  environment variable to [provide JVM options for Coursier](https://github.com/bazelbuild/rules_jvm_external#provide-jvm-options-for-coursier-with-coursier_opts)
 
 <a name="transitive-dependencies"></a>
 ## Transitive dependencies
@@ -307,7 +352,16 @@ bootstrap test.
 ### Repository rules
 
 Prefer [`http_archive`](repo/http.html#http_archive) to `git_repository` and
-`new_git_repository`.
+`new_git_repository`. The reasons are:
+
+* Git repository rules depend on system `git(1)` whereas the HTTP downloader is built
+  into Bazel and has no system dependencies.
+* `http_archive` supports a list of `urls` as mirrors, and `git_repository` supports only
+  a single `remote`.
+* `http_archive` works with the [repository cache](guide.html#repository-cache), but not
+  `git_repository`. See
+   [#5116](https://github.com/bazelbuild/bazel/issues/5116) for more information.
+
 
 Do not use `bind()`.  See "[Consider removing
 bind](https://github.com/bazelbuild/bazel/issues/1952)" for a long discussion of its issues and

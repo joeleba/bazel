@@ -13,7 +13,10 @@ filegroup(
     name = "test-deps",
     testonly = 1,
     srcs = ["//src:bazel"],
-    data = ["//src/tools/remote:worker"],
+    data = [
+        "//src/tools/remote:worker",
+        "//src/tools/remote:worker_deploy.jar",
+    ],
 )
 
 py_library(
@@ -26,6 +29,7 @@ py_library(
         "//third_party/def_parser:__pkg__",
         "//tools/android:__pkg__",
         "//tools/build_rules:__pkg__",
+        "//tools/ctexplain:__pkg__",
         "//tools/python:__pkg__",
     ],
 )
@@ -73,7 +77,10 @@ py_test(
     tags = [
         "requires-network",
     ],
-    deps = [":test_base"],
+    deps = [
+        ":test_base",
+        "//third_party/py/six",
+    ],
 )
 
 py_test(
@@ -172,6 +179,16 @@ py_test(
         "//src/conditions:windows": [":test_base"],
         "//conditions:default": [],
     }),
+)
+
+py_test(
+    name = "bazel_remote_cache_decompression_test",
+    srcs = ["remote/cache_decompression_test.py"],
+    main = "remote/cache_decompression_test.py",
+    tags = [
+        "no-sandbox",  # This test sets up mock cache on localhost.
+    ],
+    deps = [":test_base"],
 )
 
 py_test(

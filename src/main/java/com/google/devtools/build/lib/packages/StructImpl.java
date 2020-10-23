@@ -16,22 +16,20 @@ package com.google.devtools.build.lib.packages;
 import com.google.common.base.Joiner;
 import com.google.common.base.Objects;
 import com.google.common.collect.Ordering;
-import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.skylarkbuildapi.core.StructApi;
-import com.google.devtools.build.lib.syntax.ClassObject;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.EvalUtils;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.SkylarkType;
-import com.google.devtools.build.lib.syntax.Starlark;
+import com.google.devtools.build.lib.starlarkbuildapi.core.StructApi;
 import com.google.protobuf.TextFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.ClassObject;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.syntax.Location;
 
 /**
  * An abstract base class for Starlark values that have fields, have to_json and to_proto methods,
@@ -40,7 +38,7 @@ import javax.annotation.Nullable;
  *
  * <p>StructImpl does not specify how the fields are represented; subclasses must define {@code
  * getValue} and {@code getFieldNames}. For example, {@code NativeInfo} supplies fields from the
- * subclass's {@code SkylarkCallable(structField=true)} annotations, and {@code SkylarkInfo}
+ * subclass's {@code StarlarkMethod(structField=true)} annotations, and {@code StarlarkInfo}
  * supplies fields from the map provided at its construction.
  *
  * <p>Two StructImpls are equivalent if they have the same provider and, for each field name
@@ -56,7 +54,7 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
    * Constructs an {@link StructImpl}.
    *
    * @param provider the provider describing the type of this instance
-   * @param location the Skylark location where this instance is created. If null, defaults to
+   * @param location the Starlark location where this instance is created. If null, defaults to
    *     {@link Location#BUILTIN}.
    */
   protected StructImpl(Provider provider, @Nullable Location location) {
@@ -83,8 +81,14 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
     if (obj == null) {
       return null;
     }
-    SkylarkType.checkType(obj, type, key);
-    return type.cast(obj);
+    try {
+      return type.cast(obj);
+    } catch (
+        @SuppressWarnings("UnusedException")
+        ClassCastException unused) {
+      throw Starlark.errorf(
+          "for %s field, got %s, want %s", key, Starlark.type(obj), Starlark.classType(type));
+    }
   }
 
   /**
@@ -141,8 +145,8 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
   }
 
   /**
-   * Convert the object to string using Skylark syntax. The output tries to be reversible (but there
-   * is no guarantee, it depends on the actual values).
+   * Convert the object to string using Starlark syntax. The output tries to be reversible (but
+   * there is no guarantee, it depends on the actual values).
    */
   @Override
   public void repr(Printer printer) {
@@ -171,76 +175,7 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
 
   @Override
   public String toProto() throws EvalException {
-    StringBuilder sb = new StringBuilder();
-    printProtoTextMessage(this, sb, 0);
-    return sb.toString();
-  }
-
-  private static void printProtoTextMessage(ClassObject object, StringBuilder sb, int indent)
-      throws EvalException {
-    // For determinism sort the fields alphabetically.
-    List<String> fields = new ArrayList<>(object.getFieldNames());
-    Collections.sort(fields);
-    for (String field : fields) {
-      printProtoTextMessage(field, object.getValue(field), sb, indent);
-    }
-  }
-
-  private static void printProtoTextMessage(
-      String key, Object value, StringBuilder sb, int indent, String container)
-      throws EvalException {
-    if (value instanceof Map.Entry) {
-      Map.Entry<?, ?> entry = (Map.Entry<?, ?>) value;
-      print(sb, key + " {", indent);
-      printProtoTextMessage("key", entry.getKey(), sb, indent + 1);
-      printProtoTextMessage("value", entry.getValue(), sb, indent + 1);
-      print(sb, "}", indent);
-    } else if (value instanceof ClassObject) {
-      print(sb, key + " {", indent);
-      printProtoTextMessage((ClassObject) value, sb, indent + 1);
-      print(sb, "}", indent);
-    } else if (value instanceof String) {
-      print(
-          sb,
-          key + ": \"" + escapeDoubleQuotesAndBackslashesAndNewlines((String) value) + "\"",
-          indent);
-    } else if (value instanceof Integer) {
-      print(sb, key + ": " + value, indent);
-    } else if (value instanceof Boolean) {
-      // We're relying on the fact that Java converts Booleans to Strings in the same way
-      // as the protocol buffers do.
-      print(sb, key + ": " + value, indent);
-    } else {
-      throw Starlark.errorf(
-          "Invalid text format, expected a struct, a dict, a string, a bool, or an int but got a"
-              + " %s for %s '%s'",
-          EvalUtils.getDataTypeName(value), container, key);
-    }
-  }
-
-  private static void printProtoTextMessage(String key, Object value, StringBuilder sb, int indent)
-      throws EvalException {
-    if (value instanceof Sequence) {
-      for (Object item : ((Sequence) value)) {
-        // TODO(bazel-team): There should be some constraint on the fields of the structs
-        // in the same list but we ignore that for now.
-        printProtoTextMessage(key, item, sb, indent, "list element in struct field");
-      }
-    } else if (value instanceof Dict) {
-      for (Map.Entry<?, ?> entry : ((Dict<?, ?>) value).entrySet()) {
-        printProtoTextMessage(key, entry, sb, indent, "entry of dictionary");
-      }
-    } else {
-      printProtoTextMessage(key, value, sb, indent, "struct field");
-    }
-  }
-
-  private static void print(StringBuilder sb, String text, int indent) {
-    for (int i = 0; i < indent; i++) {
-      sb.append("  ");
-    }
-    sb.append(text);
-    sb.append("\n");
+    return StarlarkLibrary.Proto.INSTANCE.encodeText(this);
   }
 
   /**
@@ -270,9 +205,8 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
       for (String field : ((ClassObject) value).getFieldNames()) {
         sb.append(join);
         join = ",";
-        sb.append("\"");
-        sb.append(field);
-        sb.append("\":");
+        appendJSONStringLiteral(sb, field);
+        sb.append(':');
         printJson(((ClassObject) value).getValue(field), sb, "struct field", field);
       }
       sb.append("}");
@@ -285,13 +219,10 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
         if (!(entry.getKey() instanceof String)) {
           throw Starlark.errorf(
               "Keys must be a string but got a %s for %s%s",
-              EvalUtils.getDataTypeName(entry.getKey()),
-              container,
-              key != null ? " '" + key + "'" : "");
+              Starlark.type(entry.getKey()), container, key != null ? " '" + key + "'" : "");
         }
-        sb.append("\"");
-        sb.append(entry.getKey());
-        sb.append("\":");
+        appendJSONStringLiteral(sb, (String) entry.getKey());
+        sb.append(':');
         printJson(entry.getValue(), sb, "dict value", String.valueOf(entry.getKey()));
       }
       sb.append("}");
@@ -305,23 +236,22 @@ public abstract class StructImpl implements Info, ClassObject, StructApi {
       }
       sb.append("]");
     } else if (value instanceof String) {
-      sb.append("\"");
-      sb.append(jsonEscapeString((String) value));
-      sb.append("\"");
-    } else if (value instanceof Integer || value instanceof Boolean) {
+      appendJSONStringLiteral(sb, (String) value);
+    } else if (value instanceof StarlarkInt || value instanceof Boolean) {
       sb.append(value);
     } else {
       throw Starlark.errorf(
           "Invalid text format, expected a struct, a string, a bool, or an int but got a %s for"
               + " %s%s",
-          EvalUtils.getDataTypeName(value), container, key != null ? " '" + key + "'" : "");
+          Starlark.type(value), container, key != null ? " '" + key + "'" : "");
     }
   }
 
-  private static String jsonEscapeString(String string) {
-    return escapeDoubleQuotesAndBackslashesAndNewlines(string)
-        .replace("\r", "\\r")
-        .replace("\t", "\\t");
+  private static void appendJSONStringLiteral(StringBuilder out, String s) {
+    out.append('"');
+    out.append(
+        escapeDoubleQuotesAndBackslashesAndNewlines(s).replace("\r", "\\r").replace("\t", "\\t"));
+    out.append('"');
   }
 
   @Override

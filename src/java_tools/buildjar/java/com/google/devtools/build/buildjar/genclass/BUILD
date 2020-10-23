@@ -1,3 +1,4 @@
+load("//tools/build_rules:java_rules_skylark.bzl", "bootstrap_java_binary")
 load("@rules_java//java:defs.bzl", "java_binary", "java_library")
 
 package(default_visibility = ["//src/java_tools/buildjar:buildjar_package_group"])
@@ -5,6 +6,7 @@ package(default_visibility = ["//src/java_tools/buildjar:buildjar_package_group"
 filegroup(
     name = "srcs",
     srcs = glob(["*.java"]) + ["BUILD"],
+    visibility = ["//src:__subpackages__"],
 )
 
 java_binary(
@@ -29,10 +31,8 @@ java_library(
 )
 
 #
-## Bootstrapping using Skylark rules
+## Bootstrapping using Starlark rules
 #
-
-load("//tools/build_rules:java_rules_skylark.bzl", "bootstrap_java_binary")
 
 bootstrap_java_binary(
     name = "bootstrap_genclass",
@@ -40,7 +40,7 @@ bootstrap_java_binary(
     main_class = "com.google.devtools.build.buildjar.genclass.GenClass",
     tags = ["manual"],
     deps = [
-        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:skylark-deps",
+        "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar:starlark-deps",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/jarhelper:bootstrap_jarhelper",
     ],
 )

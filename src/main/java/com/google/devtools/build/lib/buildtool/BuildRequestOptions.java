@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.buildtool;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.CacheBuilderSpec;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.LocalHostCapacity;
 import com.google.devtools.build.lib.util.OptionsUtils;
 import com.google.devtools.build.lib.util.ResourceConverter;
@@ -33,7 +34,6 @@ import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.RegexPatternOption;
 import java.util.List;
-import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 /**
@@ -45,7 +45,7 @@ import javax.annotation.Nullable;
 public class BuildRequestOptions extends OptionsBase {
   public static final OptionDefinition EXPERIMENTAL_MULTI_CPU =
       OptionsParser.getOptionDefinitionByName(BuildRequestOptions.class, "experimental_multi_cpu");
-  private static final Logger logger = Logger.getLogger(BuildRequestOptions.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
   private static final int JOBS_TOO_HIGH_WARNING = 2500;
   @VisibleForTesting public static final int MAX_JOBS = 5000;
 
@@ -59,48 +59,46 @@ public class BuildRequestOptions extends OptionsBase {
       effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
       converter = JobsConverter.class,
       help =
-          "The number of concurrent jobs to run. Takes {@value FLAG_SYNTAX}. Values must be"
-              + " between 1 and"
+          "The number of concurrent jobs to run. Takes "
+              + ResourceConverter.FLAG_SYNTAX
+              + ". Values must be between 1 and "
               + MAX_JOBS
-              + " values above "
+              + ". Values above "
               + JOBS_TOO_HIGH_WARNING
               + " may cause memory issues. \"auto\" calculates a reasonable default based on"
               + " host resources.")
   public int jobs;
 
   @Option(
-    name = "progress_report_interval",
-    defaultValue = "0",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    converter = ProgressReportIntervalConverter.class,
-    help =
-        "The number of seconds to wait between two reports on still running jobs. The "
-            + "default value 0 means to use the default 10:30:60 incremental algorithm."
-  )
+      name = "progress_report_interval",
+      defaultValue = "0",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      converter = ProgressReportIntervalConverter.class,
+      help =
+          "The number of seconds to wait between two reports on still running jobs. The "
+              + "default value 0 means to use the default 10:30:60 incremental algorithm.")
   public int progressReportInterval;
 
   @Option(
-    name = "explain",
-    defaultValue = "null",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    converter = OptionsUtils.PathFragmentConverter.class,
-    help =
-        "Causes the build system to explain each executed step of the "
-            + "build. The explanation is written to the specified log file."
-  )
+      name = "explain",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      converter = OptionsUtils.PathFragmentConverter.class,
+      help =
+          "Causes the build system to explain each executed step of the "
+              + "build. The explanation is written to the specified log file.")
   public PathFragment explanationPath;
 
   @Option(
-    name = "verbose_explanations",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Increases the verbosity of the explanations issued if --explain is enabled. "
-            + "Has no effect if --explain is not enabled."
-  )
+      name = "verbose_explanations",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Increases the verbosity of the explanations issued if --explain is enabled. "
+              + "Has no effect if --explain is not enabled.")
   public boolean verboseExplanations;
 
   @Option(
@@ -114,43 +112,44 @@ public class BuildRequestOptions extends OptionsBase {
   public RegexPatternOption outputFilter;
 
   @Option(
-    name = "analyze",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Execute the analysis phase; this is the usual behaviour. Specifying --noanalyze causes "
-            + "the build to stop before starting the analysis phase, returning zero iff the "
-            + "package loading completed successfully; this mode is useful for testing."
-  )
+      name = "analyze",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Execute the loading/analysis phase; this is the usual behaviour. Specifying --noanalyze"
+              + "causes the build to stop before starting the loading/analysis phase, just doing "
+              + "target pattern parsing and returning zero iff that completed successfully; this "
+              + "mode is useful for testing.")
   public boolean performAnalysisPhase;
 
   @Option(
-    name = "build",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-    effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Execute the build; this is the usual behaviour. "
-            + "Specifying --nobuild causes the build to stop before executing the build "
-            + "actions, returning zero iff the package loading and analysis phases completed "
-            + "successfully; this mode is useful for testing those phases."
-  )
+      name = "build",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Execute the build; this is the usual behaviour. "
+              + "Specifying --nobuild causes the build to stop before executing the build "
+              + "actions, returning zero iff the package loading and analysis phases completed "
+              + "successfully; this mode is useful for testing those phases.")
   public boolean performExecutionPhase;
 
   @Option(
-    name = "output_groups",
-    converter = Converters.CommaSeparatedOptionListConverter.class,
-    allowMultiple = true,
-    documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-    effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
-    defaultValue = "",
-    help =
-        "Specifies which output groups of the top-level targets to build. If omitted, a default "
-            + "set of output groups are built. When specified the default set is overridden. "
-            + "However you may use --output_groups=+<output_group> or "
-            + "--output_groups=-<output_group> to instead modify the set of output groups."
-  )
+      name = "output_groups",
+      converter = Converters.CommaSeparatedOptionListConverter.class,
+      allowMultiple = true,
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
+      defaultValue = "null",
+      help =
+          "A list of comma-separated output group names, each of which optionally prefixed by a +"
+              + " or a -. A group prefixed by + is added to the default set of output groups,"
+              + " while a group prefixed by - is removed from the default set. If at least one"
+              + " group is not prefixed, the default set of output groups is omitted. For example,"
+              + " --output_groups=+foo,+bar builds the union of the default set, foo, and bar,"
+              + " while --output_groups=foo,bar overrides the default set such that only foo and"
+              + " bar are built.")
   public List<String> outputGroups;
 
   @Option(
@@ -162,42 +161,39 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean runValidationActions;
 
   @Option(
-    name = "show_result",
-    defaultValue = "1",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Show the results of the build.  For each target, state whether or not it was brought "
-            + "up-to-date, and if so, a list of output files that were built.  The printed files "
-            + "are convenient strings for copy+pasting to the shell, to execute them.\n"
-            + "This option requires an integer argument, which is the threshold number of "
-            + "targets above which result information is not printed. Thus zero causes "
-            + "suppression of the message and MAX_INT causes printing of the result to occur "
-            + "always.  The default is one."
-  )
+      name = "show_result",
+      defaultValue = "1",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Show the results of the build.  For each target, state whether or not it was brought "
+              + "up-to-date, and if so, a list of output files that were built.  The printed files "
+              + "are convenient strings for copy+pasting to the shell, to execute them.\n"
+              + "This option requires an integer argument, which is the threshold number of "
+              + "targets above which result information is not printed. Thus zero causes "
+              + "suppression of the message and MAX_INT causes printing of the result to occur "
+              + "always.  The default is one.")
   public int maxResultTargets;
 
   @Option(
-    name = "experimental_show_artifacts",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "Output a list of all top level artifacts produced by this build."
-            + "Use output format suitable for tool consumption. "
-            + "This flag is temporary and intended to facilitate Android Studio integration. "
-            + "This output format will likely change in the future or disappear completely."
-  )
+      name = "experimental_show_artifacts",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Output a list of all top level artifacts produced by this build."
+              + "Use output format suitable for tool consumption. "
+              + "This flag is temporary and intended to facilitate Android Studio integration. "
+              + "This output format will likely change in the future or disappear completely.")
   public boolean showArtifacts;
 
   @Option(
-    name = "announce",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.LOGGING,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help = "Deprecated. No-op.",
-    deprecationWarning = "This option is now deprecated and is a no-op"
-  )
+      name = "announce",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help = "Deprecated. No-op.",
+      deprecationWarning = "This option is now deprecated and is a no-op")
   public boolean announce;
 
   @Option(
@@ -252,7 +248,7 @@ public class BuildRequestOptions extends OptionsBase {
       name = "experimental_multi_cpu",
       converter = Converters.CommaSeparatedOptionListConverter.class,
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
       metadataTags = {OptionMetadataTag.EXPERIMENTAL},
@@ -262,17 +258,16 @@ public class BuildRequestOptions extends OptionsBase {
   public List<String> multiCpus;
 
   @Option(
-    name = "output_tree_tracking",
-    oldName = "experimental_output_tree_tracking",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-    help =
-        "If set, tell the output service (if any) to track when files in the output "
-            + "tree have been modified externally (not by the build system). "
-            + "This should improve incremental build speed when an appropriate output service "
-            + "is enabled."
-  )
+      name = "output_tree_tracking",
+      oldName = "experimental_output_tree_tracking",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
+      help =
+          "If set, tell the output service (if any) to track when files in the output "
+              + "tree have been modified externally (not by the build system). "
+              + "This should improve incremental build speed when an appropriate output service "
+              + "is enabled.")
   public boolean finalizeActions;
 
   @Option(
@@ -287,19 +282,18 @@ public class BuildRequestOptions extends OptionsBase {
   public CacheBuilderSpec directoryCreationCacheSpec;
 
   @Option(
-    name = "aspects",
-    converter = Converters.CommaSeparatedOptionListConverter.class,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    allowMultiple = true,
-    help =
-        "Comma-separated list of aspects to be applied to top-level targets. All aspects "
-            + "are applied to all top-level targets independently. Aspects are specified in "
-            + "the form <bzl-file-label>%<aspect_name>, "
-            + "for example '//tools:my_def.bzl%my_aspect', where 'my_aspect' is a top-level "
-            + "value from from a file tools/my_def.bzl"
-  )
+      name = "aspects",
+      converter = Converters.CommaSeparatedOptionListConverter.class,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      allowMultiple = true,
+      help =
+          "Comma-separated list of aspects to be applied to top-level targets. All aspects "
+              + "are applied to all top-level targets independently. Aspects are specified in "
+              + "the form <bzl-file-label>%<aspect_name>, "
+              + "for example '//tools:my_def.bzl%my_aspect', where 'my_aspect' is a top-level "
+              + "value from from a file tools/my_def.bzl")
   public List<String> aspects;
 
   public BuildRequestOptions() throws OptionsParsingException {}
@@ -311,15 +305,14 @@ public class BuildRequestOptions extends OptionsBase {
   // Transitional flag for safely rolling out new convenience symlink behavior.
   // To be made a no-op and deleted once new symlink behavior is battle-tested.
   @Option(
-    name = "use_top_level_targets_for_symlinks",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
-    help =
-        "If enabled, the symlinks are based on the configurations of the top-level targets "
-            + " rather than the top-level target configuration. If this would be ambiguous, "
-            + " the symlinks will be deleted to avoid confusion."
-  )
+      name = "use_top_level_targets_for_symlinks",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "If enabled, the symlinks are based on the configurations of the top-level targets "
+              + " rather than the top-level target configuration. If this would be ambiguous, "
+              + " the symlinks will be deleted to avoid confusion.")
   public boolean useTopLevelTargetsForSymlinks;
 
   /**
@@ -368,15 +361,14 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean printWorkspaceInOutputPathsIfNeeded;
 
   @Option(
-    name = "use_action_cache",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {
-      OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
-      OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS
-    },
-    help = "Whether to use the action cache"
-  )
+      name = "use_action_cache",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {
+        OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+        OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS
+      },
+      help = "Whether to use the action cache")
   public boolean useActionCache;
 
   @Option(
@@ -403,16 +395,6 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean useAsyncExecution;
 
   @Option(
-      name = "experimental_strict_conflict_checks",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      metadataTags = OptionMetadataTag.INCOMPATIBLE_CHANGE,
-      effectTags = {OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION},
-      help =
-          "Check for action prefix file path conflicts, regardless of action-specific overrides.")
-  public boolean strictConflictChecks;
-
-  @Option(
       name = "incompatible_skip_genfiles_symlink",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -428,7 +410,7 @@ public class BuildRequestOptions extends OptionsBase {
 
   @Option(
       name = "experimental_nested_set_as_skykey_threshold",
-      defaultValue = "0",
+      defaultValue = "1",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       metadataTags = OptionMetadataTag.EXPERIMENTAL,
       effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.LOSES_INCREMENTAL_STATE},
@@ -455,6 +437,73 @@ public class BuildRequestOptions extends OptionsBase {
       help = "If this flag is set, replay action out/err on incremental builds.")
   public boolean replayActionOutErr;
 
+  @Option(
+      name = "target_pattern_file",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.GENERIC_INPUTS,
+      effectTags = {OptionEffectTag.CHANGES_INPUTS},
+      help =
+          "If set, build will read patterns from the file named here, rather than on the command "
+              + "line. It is an error to specify a file here as well as command-line patterns.")
+  public String targetPatternFile;
+
+  /** Converter for filesystem value checker threads. */
+  public static class ThreadConverter extends ResourceConverter {
+    public ThreadConverter() {
+      super(
+          /* autoSupplier= */ () ->
+              (int) Math.ceil(LocalHostCapacity.getLocalHostCapacity().getCpuUsage()),
+          /* minValue= */ 1,
+          /* maxValue= */ Integer.MAX_VALUE);
+    }
+  }
+
+  @Option(
+      name = "experimental_fsvc_threads",
+      defaultValue = "200",
+      converter = ThreadConverter.class,
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help = "The number of threads that are used by the FileSystemValueChecker.")
+  public int fsvcThreads;
+
+  @Option(
+      name = "experimental_no_product_name_out_symlink",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "If this flag is set to true, the <product>-out symlink will not be created if "
+              + "--symlink_prefix is used.")
+  public boolean experimentalNoProductNameOutSymlink;
+
+  @Option(
+      name = "experimental_aquery_dump_after_build_format",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      help =
+          "Writes the state of Skyframe (which includes previous invocations on this blaze"
+              + " instance as well) to stdout after a build, in the same format as aquery's."
+              + " Possible formats: proto|textproto|jsonproto.")
+  @Nullable
+  public String aqueryDumpAfterBuildFormat;
+
+  @Option(
+      name = "experimental_aquery_dump_after_build_output_file",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+      converter = OptionsUtils.PathFragmentConverter.class,
+      help =
+          "Specify the output file for the aquery dump after a build. Use in conjunction with"
+              + " --experimental_aquery_dump_after_build_format. The path provided is relative to"
+              + " Bazel's output base, unless it's an absolute path.")
+  @Nullable
+  public PathFragment aqueryDumpAfterBuildOutputFile;
+
   /**
    * Converter for jobs: Takes keyword ({@value #FLAG_SYNTAX}). Values must be between 1 and
    * MAX_JOBS.
@@ -474,12 +523,11 @@ public class BuildRequestOptions extends OptionsBase {
             String.format("Value '(%d)' must be at least %d.", value, minValue));
       }
       if (value > maxValue) {
-        logger.warning(
-            String.format(
-                "Flag remoteWorker \"jobs\" ('%d') was set too high. "
-                    + "This is a result of passing large values to --local_resources or --jobs. "
-                    + "Using '%d' jobs",
-                value, maxValue));
+        logger.atWarning().log(
+            "Flag remoteWorker \"jobs\" ('%d') was set too high. "
+                + "This is a result of passing large values to --local_resources or --jobs. "
+                + "Using '%d' jobs",
+            value, maxValue);
         value = maxValue;
       }
       return value;

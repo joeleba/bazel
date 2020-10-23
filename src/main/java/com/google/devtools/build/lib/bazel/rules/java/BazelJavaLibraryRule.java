@@ -22,11 +22,10 @@ import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.ConfigAwareRuleClassBuilder;
-import com.google.devtools.build.lib.analysis.config.HostTransition;
-import com.google.devtools.build.lib.analysis.test.TestConfiguration;
+import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaRuleClasses.JavaRule;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
@@ -44,12 +43,7 @@ public final class BazelJavaLibraryRule implements RuleDefinition {
         // For getting the host Java executable.
         .requiresHostConfigurationFragments(JavaConfiguration.class)
         .originalBuilder()
-        .requiresConfigurationFragments(
-            JavaConfiguration.class,
-            CppConfiguration.class,
-            // TestConfiguration is only required by the java rules to know when the persistent test
-            // runner is enabled.
-            TestConfiguration.class)
+        .requiresConfigurationFragments(JavaConfiguration.class, CppConfiguration.class)
         /* <!-- #BLAZE_RULE(java_library).IMPLICIT_OUTPUTS -->
         <ul>
           <li><code>lib<var>name</var>.jar</code>: A Java archive containing the class files.</li>
@@ -156,11 +150,12 @@ public final class BazelJavaLibraryRule implements RuleDefinition {
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(
             attr("exported_plugins", LABEL_LIST)
-                .cfg(HostTransition.createFactory())
+                .cfg(ExecutionTransitionFactory.create())
                 .allowedRuleClasses("java_plugin")
                 .allowedFileTypes())
-        .advertiseSkylarkProvider(SkylarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
+        .advertiseStarlarkProvider(StarlarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
         .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(env))
+        .useToolchainTransition(true)
         .build();
   }
 

@@ -27,7 +27,6 @@ import com.google.devtools.common.options.Converters.TriStateConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
-import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.TriState;
@@ -133,48 +132,44 @@ public class SandboxOptions extends OptionsBase {
   public boolean sandboxFakeUsername;
 
   @Option(
-    name = "sandbox_block_path",
-    allowMultiple = true,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "For sandboxed actions, disallow access to this path."
-  )
+      name = "sandbox_block_path",
+      allowMultiple = true,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "For sandboxed actions, disallow access to this path.")
   public List<String> sandboxBlockPath;
 
   @Option(
-    name = "sandbox_tmpfs_path",
-    allowMultiple = true,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "For sandboxed actions, mount an empty, writable directory at this path"
-            + " (if supported by the sandboxing implementation, ignored otherwise)."
-  )
+      name = "sandbox_tmpfs_path",
+      allowMultiple = true,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "For sandboxed actions, mount an empty, writable directory at this path"
+              + " (if supported by the sandboxing implementation, ignored otherwise).")
   public List<String> sandboxTmpfsPath;
 
   @Option(
-    name = "sandbox_writable_path",
-    allowMultiple = true,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "For sandboxed actions, make an existing directory writable in the sandbox"
-            + " (if supported by the sandboxing implementation, ignored otherwise)."
-  )
+      name = "sandbox_writable_path",
+      allowMultiple = true,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "For sandboxed actions, make an existing directory writable in the sandbox"
+              + " (if supported by the sandboxing implementation, ignored otherwise).")
   public List<String> sandboxWritablePath;
 
   @Option(
-    name = "sandbox_add_mount_pair",
-    allowMultiple = true,
-    converter = MountPairConverter.class,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "Add additional path pair to mount in sandbox."
-  )
+      name = "sandbox_add_mount_pair",
+      allowMultiple = true,
+      converter = MountPairConverter.class,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "Add additional path pair to mount in sandbox.")
   public List<ImmutableMap.Entry<String, String>> sandboxAdditionalMounts;
 
   @Option(
@@ -329,20 +324,6 @@ public class SandboxOptions extends OptionsBase {
   public boolean defaultSandboxAllowNetwork;
 
   @Option(
-      name = "incompatible_symlinked_sandbox_expands_tree_artifacts_in_runfiles_tree",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
-      effectTags = {OptionEffectTag.EXECUTION},
-      metadataTags = {
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES,
-        OptionMetadataTag.INCOMPATIBLE_CHANGE
-      },
-      help =
-          "If enabled, the sandbox will expand tree artifacts in runfiles, thus the files that "
-              + "are contained in the tree artifact will be symlinked as individual files.")
-  public boolean symlinkedSandboxExpandsTreeArtifactsInRunfilesTree;
-
-  @Option(
       name = "experimental_sandbox_async_tree_delete_idle_threads",
       defaultValue = "0",
       converter = AsyncTreeDeletesConverter.class,
@@ -354,6 +335,17 @@ public class SandboxOptions extends OptionsBase {
               + " on an asynchronous thread pool that has size 1 when the build is running and"
               + " grows to the size specified by this flag when the server is idle.")
   public int asyncTreeDeleteIdleThreads;
+
+  @Option(
+      name = "experimental_delay_virtual_input_materialization",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "If set to true, creates virtual inputs (like params files) only inside the sandbox, "
+              + "not in the execroot, which fixes a race condition when using the dynamic "
+              + "scheduler. This flag exists purely to support rolling this bug fix out.")
+  public boolean delayVirtualInputMaterialization;
 
   /** Converter for the number of threads used for asynchronous tree deletion. */
   public static final class AsyncTreeDeletesConverter extends ResourceConverter {

@@ -31,7 +31,6 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.Substitution;
 import com.google.devtools.build.lib.analysis.actions.Template;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.ExecutionInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -79,9 +78,9 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
 
     ImmutableList<TransitiveInfoCollection> runfilesDeps =
         ImmutableList.<TransitiveInfoCollection>builder()
-            .addAll(ruleContext.getPrerequisites("fixtures", Mode.TARGET))
-            .add(ruleContext.getPrerequisite("target_device", Mode.HOST))
-            .add(ruleContext.getPrerequisite("$test_entry_point", Mode.HOST))
+            .addAll(ruleContext.getPrerequisites("fixtures"))
+            .add(ruleContext.getPrerequisite("target_device"))
+            .add(ruleContext.getPrerequisite("$test_entry_point"))
             .build();
 
     Runfiles runfiles =
@@ -203,13 +202,12 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
 
   @Nullable
   private static AndroidInstrumentationInfo getInstrumentationProvider(RuleContext ruleContext) {
-    return ruleContext.getPrerequisite(
-        "test_app", Mode.TARGET, AndroidInstrumentationInfo.PROVIDER);
+    return ruleContext.getPrerequisite("test_app", AndroidInstrumentationInfo.PROVIDER);
   }
 
   @Nullable
   private static ApkInfo getApkProvider(RuleContext ruleContext) {
-    return ruleContext.getPrerequisite("test_app", Mode.TARGET, ApkInfo.PROVIDER);
+    return ruleContext.getPrerequisite("test_app", ApkInfo.PROVIDER);
   }
 
   /** The target APK from the {@code android_binary} in the {@code instrumentation} attribute. */
@@ -234,13 +232,13 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
             .addTransitive(AndroidCommon.getSupportApks(ruleContext));
     for (AndroidDeviceScriptFixtureInfoProvider fixture :
         ruleContext.getPrerequisites(
-            "fixtures", Mode.TARGET, AndroidDeviceScriptFixtureInfoProvider.SKYLARK_CONSTRUCTOR)) {
+            "fixtures",
+            AndroidDeviceScriptFixtureInfoProvider.STARLARK_CONSTRUCTOR)) {
       allSupportApks.addTransitive(fixture.getSupportApks());
     }
     for (AndroidHostServiceFixtureInfoProvider fixture :
         ruleContext.getPrerequisites(
             "fixtures",
-            Mode.TARGET,
             AndroidHostServiceFixtureInfoProvider.ANDROID_HOST_SERVICE_FIXTURE_INFO)) {
       allSupportApks.addTransitive(fixture.getSupportApks());
     }
@@ -249,12 +247,12 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
 
   /** The deploy jar that interacts with the device. */
   private static FilesToRunProvider getTestEntryPoint(RuleContext ruleContext) {
-    return ruleContext.getExecutablePrerequisite("$test_entry_point", Mode.HOST);
+    return ruleContext.getExecutablePrerequisite("$test_entry_point");
   }
 
   /** The {@code android_device} script to launch an emulator for the test. */
   private static FilesToRunProvider getTargetDevice(RuleContext ruleContext) {
-    return ruleContext.getExecutablePrerequisite("target_device", Mode.HOST);
+    return ruleContext.getExecutablePrerequisite("target_device");
   }
 
   /** ADB binary from the Android SDK. */
@@ -268,7 +266,7 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
   }
 
   private static ImmutableList<Artifact> getDataDeps(RuleContext ruleContext) {
-    return ruleContext.getPrerequisiteArtifacts("data", Mode.DONT_CHECK).list();
+    return ruleContext.getPrerequisiteArtifacts("data").list();
   }
 
   /**
@@ -283,7 +281,6 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
         ImmutableList.copyOf(
             ruleContext.getPrerequisites(
                 "fixtures",
-                Mode.TARGET,
                 AndroidHostServiceFixtureInfoProvider.ANDROID_HOST_SERVICE_FIXTURE_INFO));
     if (hostServiceFixtures.size() > 1) {
       ruleContext.ruleError(
@@ -295,12 +292,13 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
   private static Iterable<AndroidDeviceScriptFixtureInfoProvider> getDeviceScriptFixtures(
       RuleContext ruleContext) {
     return ruleContext.getPrerequisites(
-        "fixtures", Mode.TARGET, AndroidDeviceScriptFixtureInfoProvider.SKYLARK_CONSTRUCTOR);
+        "fixtures",
+        AndroidDeviceScriptFixtureInfoProvider.STARLARK_CONSTRUCTOR);
   }
 
   private static String getDeviceBrokerType(RuleContext ruleContext) {
     return ruleContext
-        .getPrerequisite("target_device", Mode.HOST, AndroidDeviceBrokerInfo.PROVIDER)
+        .getPrerequisite("target_device", AndroidDeviceBrokerInfo.PROVIDER)
         .getDeviceBrokerType();
   }
 
@@ -318,8 +316,8 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
               AndroidInstrumentationTestBase.class, TEST_SUITE_PROPERTY_NAME_FILE)
           .trim();
     } catch (IOException e) {
-      ruleContext.throwWithRuleError("Cannot load test suite property name: " + e.getMessage());
-      return null;
+      throw ruleContext.throwWithRuleError(
+          "Cannot load test suite property name: " + e.getMessage(), e);
     }
   }
 
@@ -332,7 +330,7 @@ public class AndroidInstrumentationTestBase implements RuleConfiguredTargetFacto
    */
   private static ExecutionInfo getExecutionInfoProvider(RuleContext ruleContext) {
     ExecutionInfo executionInfo =
-        ruleContext.getPrerequisite("target_device", Mode.HOST, ExecutionInfo.PROVIDER);
+        ruleContext.getPrerequisite("target_device", ExecutionInfo.PROVIDER);
     ImmutableMap<String, String> executionRequirements =
         (executionInfo != null) ? executionInfo.getExecutionInfo() : ImmutableMap.of();
     return new ExecutionInfo(executionRequirements);

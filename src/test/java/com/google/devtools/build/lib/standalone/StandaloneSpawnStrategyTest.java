@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.standalone;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -35,11 +35,12 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetExpander;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.PrintingEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
@@ -48,6 +49,7 @@ import com.google.devtools.build.lib.exec.BlazeExecutor;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
 import com.google.devtools.build.lib.exec.SingleBuildFileCache;
+import com.google.devtools.build.lib.exec.SpawnStrategyResolver;
 import com.google.devtools.build.lib.exec.local.LocalExecutionOptions;
 import com.google.devtools.build.lib.exec.local.LocalSpawnRunner;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
@@ -94,7 +96,8 @@ public class StandaloneSpawnStrategyTest {
 
   private Path createTestRoot() throws IOException {
     fileSystem = FileSystems.getNativeFileSystem();
-    Path testRoot = fileSystem.getPath(TestUtils.tmpDir());
+    Path testRoot = fileSystem.getPath(TestUtils.tmpDir()).getRelative("test");
+    testRoot.createDirectoryAndParents();
     try {
       testRoot.deleteTreesBelow();
     } catch (IOException e) {
@@ -149,11 +152,13 @@ public class StandaloneSpawnStrategyTest {
                 resourceManager,
                 (env, binTools1, fallbackTmpDir) -> ImmutableMap.copyOf(env),
                 binTools,
-                Mockito.mock(RunfilesTreeUpdater.class)));
+                /*processWrapper=*/ null,
+                Mockito.mock(RunfilesTreeUpdater.class)),
+            /*verboseFailures=*/ false);
     this.executor =
         new TestExecutorBuilder(fileSystem, directories, binTools)
-            .addStrategy(SpawnStrategy.class, strategy, "standalone")
-            .setExecution("", "standalone")
+            .addStrategy(strategy, "standalone")
+            .setDefaultStrategies("standalone")
             .build();
 
     executor.getExecRoot().createDirectoryAndParents();
@@ -180,7 +185,7 @@ public class StandaloneSpawnStrategyTest {
   @Test
   public void testBinTrueExecutesFine() throws Exception {
     Spawn spawn = createSpawn(getTrueCommand());
-    executor.getContext(SpawnStrategy.class).exec(spawn, createContext());
+    executor.getContext(SpawnStrategyResolver.class).exec(spawn, createContext());
 
     if (OS.getCurrent() != OS.WINDOWS) {
       assertThat(out()).isEmpty();
@@ -189,7 +194,7 @@ public class StandaloneSpawnStrategyTest {
   }
 
   private List<SpawnResult> run(Spawn spawn) throws Exception {
-    return executor.getContext(SpawnStrategy.class).exec(spawn, createContext());
+    return executor.getContext(SpawnStrategyResolver.class).exec(spawn, createContext());
   }
 
   private ActionExecutionContext createContext() {
@@ -200,6 +205,7 @@ public class StandaloneSpawnStrategyTest {
         ActionInputPrefetcher.NONE,
         new ActionKeyContext(),
         /*metadataHandler=*/ null,
+        /*rewindingEnabled=*/ false,
         LostInputsCheck.NONE,
         outErr,
         reporter,
@@ -207,7 +213,8 @@ public class StandaloneSpawnStrategyTest {
         /*topLevelFilesets=*/ ImmutableMap.of(),
         SIMPLE_ARTIFACT_EXPANDER,
         /*actionFileSystem=*/ null,
-        /*skyframeDepsResult=*/ null);
+        /*skyframeDepsResult=*/ null,
+        NestedSetExpander.DEFAULT);
   }
 
   @Test
@@ -310,7 +317,7 @@ public class StandaloneSpawnStrategyTest {
   public void testVerboseFailures() {
     ExecException e = assertThrows(ExecException.class, () -> run(createSpawn(getFalseCommand())));
     ActionExecutionException actionExecutionException =
-        e.toActionExecutionException("", /* verboseFailures= */ true, null);
+        e.toActionExecutionException(new NullAction());
     assertWithMessage("got: " + actionExecutionException.getMessage())
         .that(actionExecutionException.getMessage().contains("failed: error executing command"))
         .isTrue();

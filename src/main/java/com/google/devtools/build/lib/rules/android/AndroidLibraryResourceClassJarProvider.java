@@ -16,13 +16,13 @@ package com.google.devtools.build.lib.rules.android;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidLibraryResourceClassJarProviderApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidLibraryResourceClassJarProviderApi;
+import net.starlark.java.eval.EvalException;
 
 /**
  * A provider which contains the resource class jars from android_library rules. See {@link
@@ -76,7 +76,7 @@ public final class AndroidLibraryResourceClassJarProvider extends NativeInfo
     public AndroidLibraryResourceClassJarProvider create(Depset jars) throws EvalException {
       return new AndroidLibraryResourceClassJarProvider(
           NestedSetBuilder.<Artifact>stableOrder()
-              .addTransitive(jars.getSetFromParam(Artifact.class, "jars"))
+              .addTransitive(Depset.cast(jars, Artifact.class, "jars"))
               .build());
     }
   }

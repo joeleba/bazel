@@ -13,6 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.exec;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionContext.ShowSubcommands;
 import com.google.devtools.build.lib.actions.Executor;
@@ -35,7 +37,6 @@ import javax.annotation.Nullable;
 @ThreadSafe
 public final class BlazeExecutor implements Executor {
 
-  private final boolean verboseFailures;
   private final ShowSubcommands showSubcommands;
   private final FileSystem fileSystem;
   private final Path execRoot;
@@ -60,21 +61,23 @@ public final class BlazeExecutor implements Executor {
       Reporter reporter,
       Clock clock,
       OptionsProvider options,
-      SpawnActionContextMaps spawnActionContextMaps) {
-    ExecutionOptions executionOptions = options.getOptions(ExecutionOptions.class);
-    this.verboseFailures = executionOptions.verboseFailures;
+      ModuleActionContextRegistry actionContextRegistry,
+      SpawnStrategyRegistry spawnStrategyRegistry) {
+    ExecutionOptions executionOptions = checkNotNull(options.getOptions(ExecutionOptions.class));
     this.showSubcommands = executionOptions.showSubcommands;
     this.fileSystem = fileSystem;
     this.execRoot = execRoot;
     this.clock = clock;
     this.options = options;
-    this.actionContextRegistry = spawnActionContextMaps;
+    this.actionContextRegistry = actionContextRegistry;
 
     if (executionOptions.debugPrintActionContexts) {
-      spawnActionContextMaps.debugPrintSpawnActionContextMaps(reporter);
+      spawnStrategyRegistry.writeSpawnStrategiesTo(reporter);
+      actionContextRegistry.writeActionContextsTo(reporter);
     }
 
-    spawnActionContextMaps.notifyUsed();
+    actionContextRegistry.notifyUsed();
+    spawnStrategyRegistry.notifyUsed(actionContextRegistry);
   }
 
   @Override
@@ -101,12 +104,6 @@ public final class BlazeExecutor implements Executor {
   @Nullable
   public <T extends ActionContext> T getContext(Class<T> type) {
     return actionContextRegistry.getContext(type);
-  }
-
-  /** Returns true iff the --verbose_failures option was enabled. */
-  @Override
-  public boolean getVerboseFailures() {
-    return verboseFailures;
   }
 
   /** Returns the options associated with the execution. */

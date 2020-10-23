@@ -19,7 +19,7 @@ load(
     "remote_java_tools_filegroup",
     "remote_java_tools_java_import",
 )
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//tools/python:private/defs.bzl", "py_binary", "py_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -55,16 +55,21 @@ toolchain(
 
 java_runtime(name = "dummy_java_runtime")
 
+# Points to toolchain[":runtime_toolchain_type"] (was :legacy_current_java_runtime)
 java_runtime_alias(name = "current_java_runtime")
 
+# Host configuration of ":current_java_runtime"
 java_host_runtime_alias(name = "current_host_java_runtime")
 
+# Points to toolchain[":toolchain_type"] (was :legacy_current_java_toolchain)
 java_toolchain_alias(name = "current_java_toolchain")
 
 # This exists to support the migration to toolchain resolution.
 # TODO(cushon): delete once the migration is complete.
+# Points to --javabase/--host_javabase, defaults ":jdk"/":remote_jdk11"
 legacy_java_runtime_alias(name = "legacy_current_java_runtime")
 
+# Points to --java_toolchain/--host_java_toolchain, defaults ":toolchain"/":remote_toolchain"
 legacy_java_toolchain_alias(name = "legacy_current_java_toolchain")
 
 # Used to set --host_javabase or --javabase to a local JDK without having to define
@@ -90,6 +95,9 @@ alias(
     name = "java_runtime_alias",
     actual = "@bazel_tools//tools/jdk:current_java_runtime",
 )
+
+# These individual jni_* targets are exposed for legacy reasons.
+# Most users should depend on :jni.
 
 java_runtime_files(
     name = "jni_header",
@@ -119,6 +127,39 @@ java_runtime_files(
 java_runtime_files(
     name = "jni_md_header-openbsd",
     srcs = ["include/openbsd/jni_md.h"],
+)
+
+# The Java native interface. Depend on this package if you #include <jni.h>.
+#
+# See test_jni in third_party/bazel/src/test/shell/bazel/bazel_java_test.sh for
+# an example of using Bazel to build a Java program that calls a C function.
+#
+# TODO(adonovan): add cases for //src/conditions:linux_arm when released in Bazel.
+# TODO(adonovan): why is there no //src/conditions target meaning "just linux"?
+cc_library(
+    name = "jni",
+    hdrs = [":jni_header"] + select({
+        "//src/conditions:linux_aarch64": [":jni_md_header-linux"],
+        "//src/conditions:linux_ppc64le": [":jni_md_header-linux"],
+        "//src/conditions:linux_s390x": [":jni_md_header-linux"],
+        "//src/conditions:linux_x86_64": [":jni_md_header-linux"],
+        "//src/conditions:darwin": [":jni_md_header-darwin"],
+        "//src/conditions:freebsd": [":jni_md_header-freebsd"],
+        "//src/conditions:openbsd": [":jni_md_header-openbsd"],
+        "//src/conditions:windows": [":jni_md_header-windows"],
+        "//conditions:default": [],
+    }),
+    includes = ["include"] + select({
+        "//src/conditions:linux_aarch64": ["include/linux"],
+        "//src/conditions:linux_ppc64le": ["include/linux"],
+        "//src/conditions:linux_s390x": ["include/linux"],
+        "//src/conditions:linux_x86_64": ["include/linux"],
+        "//src/conditions:darwin": ["include/darwin"],
+        "//src/conditions:freebsd": ["include/freebsd"],
+        "//src/conditions:openbsd": ["include/openbsd"],
+        "//src/conditions:windows": ["include/win32"],
+        "//conditions:default": [],
+    }),
 )
 
 alias(
@@ -308,7 +349,7 @@ alias(
 
 alias(
     name = "host_jdk",
-    actual = ":remote_jdk",
+    actual = ":remote_jdk11",
 )
 
 bootclasspath(
@@ -397,7 +438,12 @@ filegroup(
         "BUILD-jdk",  # Tools are build from the workspace for tests.
         "DumpPlatformClassPath.java",
         "default_java_toolchain.bzl",
+        "fail_rule.bzl",
         "java_toolchain_alias.bzl",
+        "java_toolchain_default.bzl",
+        "jdk.BUILD",
+        "local_java_repository.bzl",
+        "nosystemjdk/README",
         "proguard_whitelister.py",
         "proguard_whitelister_test.py",
         "proguard_whitelister_test_input.pgcfg",
@@ -456,40 +502,6 @@ test_suite(
     visibility = ["//tools:__pkg__"],
 )
 
-# Replacement for the embedded JDK as host javabase.
-alias(
-    name = "remote_jdk",
-    actual = select(
-        {
-            "//src/conditions:darwin": "@remotejdk_macos//:jdk",
-            "//src/conditions:darwin_x86_64": "@remotejdk_macos//:jdk",
-            "//src/conditions:windows": "@remotejdk_win//:jdk",
-            "//src/conditions:linux_aarch64": "@remotejdk_linux_aarch64//:jdk",
-            "//src/conditions:linux_x86_64": "@remotejdk_linux//:jdk",
-        },
-        no_match_error = "Could not find a JDK for host execution environment, please explicitly" +
-                         " provide one using `--host_javabase.`",
-    ),
-    visibility = ["//visibility:public"],
-)
-
-# A JDK 10 for use as a --host_javabase.
-alias(
-    name = "remote_jdk10",
-    actual = select(
-        {
-            "//src/conditions:darwin": "@remotejdk10_macos//:jdk",
-            "//src/conditions:darwin_x86_64": "@remotejdk10_macos//:jdk",
-            "//src/conditions:windows": "@remotejdk10_win//:jdk",
-            "//src/conditions:linux_aarch64": "@remotejdk10_linux_aarch64//:jdk",
-            "//src/conditions:linux_x86_64": "@remotejdk10_linux//:jdk",
-        },
-        no_match_error = "Could not find a JDK for host execution environment, please explicitly" +
-                         " provide one using `--host_javabase.`",
-    ),
-    visibility = ["//visibility:public"],
-)
-
 # A JDK 11 for use as a --host_javabase.
 alias(
     name = "remote_jdk11",
@@ -500,6 +512,8 @@ alias(
             "//src/conditions:windows": "@remotejdk11_win//:jdk",
             "//src/conditions:linux_aarch64": "@remotejdk11_linux_aarch64//:jdk",
             "//src/conditions:linux_x86_64": "@remotejdk11_linux//:jdk",
+            "//src/conditions:linux_ppc64le": "@remotejdk11_linux_ppc64le//:jdk",
+            "//src/conditions:linux_s390x": "@remotejdk11_linux_s390x//:jdk",
         },
         no_match_error = "Could not find a JDK for host execution environment, please explicitly" +
                          " provide one using `--host_javabase.`",

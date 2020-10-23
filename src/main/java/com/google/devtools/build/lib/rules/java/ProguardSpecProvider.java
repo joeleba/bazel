@@ -14,14 +14,14 @@
 package com.google.devtools.build.lib.rules.java;
 
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.skylarkbuildapi.java.ProguardSpecProviderApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.starlarkbuildapi.java.ProguardSpecProviderApi;
+import net.starlark.java.eval.EvalException;
 
 /** A target that can provide proguard specifications to Android binaries. */
 @Immutable
@@ -70,7 +70,7 @@ public final class ProguardSpecProvider extends NativeInfo
     public ProguardSpecProvider create(Depset specs) throws EvalException {
       return new ProguardSpecProvider(
           NestedSetBuilder.<Artifact>stableOrder()
-              .addTransitive(specs.getSetFromParam(Artifact.class, "specs"))
+              .addTransitive(Depset.cast(specs, Artifact.class, "specs"))
               .build());
     }
   }

@@ -16,15 +16,15 @@ package com.google.devtools.build.lib.rules.android;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidResourcesInfoApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidResourcesInfoApi;
+import net.starlark.java.eval.EvalException;
 
 /** A provider that supplies ResourceContainers from its transitive closure. */
 @Immutable
@@ -221,8 +221,8 @@ public class AndroidResourcesInfo extends NativeInfo
         Depset transitiveAapt2RTxt,
         Depset transitiveSymbolsBin,
         Depset transitiveCompiledSymbols,
-        Depset transitiveStaticLib,
-        Depset transitiveRTxt,
+        Object transitiveStaticLib,
+        Object transitiveRTxt,
         Object transitiveAapt2ValidationArtifacts)
         throws EvalException {
       return new AndroidResourcesInfo(
@@ -248,14 +248,14 @@ public class AndroidResourcesInfo extends NativeInfo
     private static <T> NestedSet<T> nestedSet(Depset from, Class<T> with, String fieldName)
         throws EvalException {
       return NestedSetBuilder.<T>stableOrder()
-          .addTransitive(from.getSetFromParam(with, fieldName))
+          .addTransitive(Depset.cast(from, with, fieldName))
           .build();
     }
 
     private static <T> NestedSet<T> nestedSet(Object from, Class<T> with, String fieldName)
         throws EvalException {
       Preconditions.checkArgument(
-          from instanceof Depset || from == com.google.devtools.build.lib.syntax.Starlark.UNBOUND);
+          from instanceof Depset || from == net.starlark.java.eval.Starlark.UNBOUND);
 
       if (from instanceof Depset) {
         return nestedSet((Depset) from, with, fieldName);

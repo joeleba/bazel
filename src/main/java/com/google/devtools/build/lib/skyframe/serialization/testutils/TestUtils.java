@@ -24,14 +24,14 @@ import com.google.devtools.build.lib.skyframe.serialization.ObjectCodecRegistry;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodecs;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
-import com.google.devtools.build.lib.syntax.Module;
-import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Module;
+import net.starlark.java.eval.Mutability;
 
 /** Helpers for serialization tests. */
 public class TestUtils {
@@ -96,28 +96,19 @@ public class TestUtils {
     return TestUtils.roundTrip(value, ImmutableMap.of());
   }
 
-  public static void assertFramesEqual(Module frame1, Module frame2) {
-    assertThat(frame1.getTransitiveBindings())
-        .containsExactlyEntriesIn(frame2.getTransitiveBindings())
-        .inOrder();
-  }
-
   /**
    * Asserts that two {@link Module}s have the same structure. Needed because {@link Module} doesn't
    * override {@link Object#equals}.
    */
-  public static void assertModulesEqual(Module frame1, Module frame2) {
-    assertThat(frame1.mutability().getAnnotation())
-        .isEqualTo(frame2.mutability().getAnnotation());
-    assertThat(frame1.getLabel()).isEqualTo(frame2.getLabel());
-    assertThat(frame1.getTransitiveBindings())
-        .containsExactlyEntriesIn(frame2.getTransitiveBindings()).inOrder();
-    if (frame1.getParent() == null || frame2.getParent() == null) {
-      assertThat(frame1.getParent()).isNull();
-      assertThat(frame2.getParent()).isNull();
-    } else {
-      assertFramesEqual(frame1.getParent(), frame2.getParent());
-    }
+  public static void assertModulesEqual(Module module1, Module module2) {
+    assertThat(module1.getClientData()).isEqualTo(module2.getClientData());
+    assertThat(module1.getGlobals()).containsExactlyEntriesIn(module2.getGlobals()).inOrder();
+    assertThat(module1.getExportedGlobals())
+        .containsExactlyEntriesIn(module2.getExportedGlobals())
+        .inOrder();
+    assertThat(module1.getPredeclaredBindings())
+        .containsExactlyEntriesIn(module2.getPredeclaredBindings())
+        .inOrder();
   }
 
   public static ByteString toBytesMemoized(Object original, ObjectCodecRegistry registry)

@@ -7,6 +7,7 @@ title: ${module.title}
 <a href="skylark-overview.html">API reference</a> &gt;
 ${module.title}
 
+<!-- {% raw %} -->
 <h1 id="modules.${module.name}">${module.title}</h1>
 
 ${module.documentation}
@@ -19,9 +20,6 @@ ${module.documentation}
     #if ($method.documented())
     <li>
       <a href="#${method.name}">${method.name}</a>
-      #if (${method.deprecated})
-      (Deprecated)
-      #end
     </li>
     #end
   #end
@@ -39,7 +37,8 @@ ${module.documentation}
     ${method.documentation}
 
     #if (!$method.params.isEmpty())
-      <h3>Parameters</h3>
+      <!-- no_toc is a class used by the jekyll-toc plugin for docs.bazel.build -->
+      <h3 class="no_toc">Parameters</h3>
       <table class="table table-bordered table-condensed table-params">
         <colgroup>
           <col class="col-param">
@@ -71,3 +70,5 @@ ${module.documentation}
     ${method.returnTypeExtraMessage}
   #end
 #end
+
+<!-- {% endraw %} -->

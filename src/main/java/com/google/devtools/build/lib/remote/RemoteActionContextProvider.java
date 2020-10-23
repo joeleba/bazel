@@ -21,13 +21,12 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.devtools.build.lib.actions.ActionGraph;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ExecutorInitException;
-import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.analysis.ArtifactsToOwnerLabels;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
-import com.google.devtools.build.lib.exec.ExecutorBuilder;
 import com.google.devtools.build.lib.exec.ExecutorLifecycleListener;
+import com.google.devtools.build.lib.exec.ModuleActionContextRegistry;
 import com.google.devtools.build.lib.exec.SpawnCache;
+import com.google.devtools.build.lib.exec.SpawnStrategyRegistry;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
@@ -80,45 +79,57 @@ final class RemoteActionContextProvider implements ExecutorLifecycleListener {
         env, cache, executor, retryScheduler, digestUtil, logDir);
   }
 
-  /** Registers the action contexts whose lifecycle this class manages. */
-  public void registerActionContexts(ExecutorBuilder executorBuilder) {
-    ExecutionOptions executionOptions =
-        checkNotNull(env.getOptions().getOptions(ExecutionOptions.class));
-    RemoteOptions remoteOptions = checkNotNull(env.getOptions().getOptions(RemoteOptions.class));
-    String buildRequestId = env.getBuildRequestId();
-    String commandId = env.getCommandId().toString();
-
+  /**
+   * Registers a remote spawn strategy if this instance was created with an executor, otherwise does
+   * nothing.
+   *
+   * @param registryBuilder builder with which to register the strategy
+   */
+  public void registerRemoteSpawnStrategyIfApplicable(
+      SpawnStrategyRegistry.Builder registryBuilder) {
     if (executor == null) {
-      RemoteSpawnCache spawnCache =
-          new RemoteSpawnCache(
-              env.getExecRoot(),
-              remoteOptions,
-              cache,
-              buildRequestId,
-              commandId,
-              env.getReporter(),
-              digestUtil,
-              filesToDownload);
-      executorBuilder.addActionContext(SpawnCache.class, spawnCache, "remote-cache");
-    } else {
-      RemoteSpawnRunner spawnRunner =
-          new RemoteSpawnRunner(
-              env.getExecRoot(),
-              remoteOptions,
-              env.getOptions().getOptions(ExecutionOptions.class),
-              executionOptions.verboseFailures,
-              env.getReporter(),
-              buildRequestId,
-              commandId,
-              (RemoteExecutionCache) cache,
-              executor,
-              retryScheduler,
-              digestUtil,
-              logDir,
-              filesToDownload);
-      executorBuilder.addActionContext(
-          SpawnStrategy.class, new RemoteSpawnStrategy(env.getExecRoot(), spawnRunner), "remote");
+      return; // Can't use a spawn strategy without executor.
     }
+
+    boolean verboseFailures =
+        checkNotNull(env.getOptions().getOptions(ExecutionOptions.class)).verboseFailures;
+    RemoteSpawnRunner spawnRunner =
+        new RemoteSpawnRunner(
+            env.getExecRoot(),
+            checkNotNull(env.getOptions().getOptions(RemoteOptions.class)),
+            env.getOptions().getOptions(ExecutionOptions.class),
+            verboseFailures,
+            env.getReporter(),
+            env.getBuildRequestId(),
+            env.getCommandId().toString(),
+            (RemoteExecutionCache) cache,
+            executor,
+            retryScheduler,
+            digestUtil,
+            logDir,
+            filesToDownload);
+    registryBuilder.registerStrategy(
+        new RemoteSpawnStrategy(env.getExecRoot(), spawnRunner, verboseFailures), "remote");
+  }
+
+  /**
+   * Registers a spawn cache action context
+   *
+   * @param registryBuilder builder with which to register the cache
+   */
+  public void registerSpawnCache(ModuleActionContextRegistry.Builder registryBuilder) {
+    RemoteSpawnCache spawnCache =
+        new RemoteSpawnCache(
+            env.getExecRoot(),
+            checkNotNull(env.getOptions().getOptions(RemoteOptions.class)),
+            checkNotNull(env.getOptions().getOptions(ExecutionOptions.class)).verboseFailures,
+            cache,
+            env.getBuildRequestId(),
+            env.getCommandId().toString(),
+            env.getReporter(),
+            digestUtil,
+            filesToDownload);
+    registryBuilder.register(SpawnCache.class, spawnCache, "remote-cache");
   }
 
   /** Returns the remote cache. */
@@ -131,12 +142,11 @@ final class RemoteActionContextProvider implements ExecutorLifecycleListener {
   }
 
   @Override
-  public void executorCreated() throws ExecutorInitException {}
+  public void executorCreated() {}
 
   @Override
   public void executionPhaseStarting(
-      ActionGraph actionGraph, Supplier<ArtifactsToOwnerLabels> topLevelArtifactsToOwnerLabels)
-      throws ExecutorInitException, InterruptedException {}
+      ActionGraph actionGraph, Supplier<ArtifactsToOwnerLabels> topLevelArtifactsToOwnerLabels) {}
 
   @Override
   public void executionPhaseEnding() {

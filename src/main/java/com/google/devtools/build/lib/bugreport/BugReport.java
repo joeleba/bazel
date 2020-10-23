@@ -19,42 +19,44 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
+import com.google.devtools.build.lib.util.CrashFailureDetails;
 import com.google.devtools.build.lib.util.CustomExitCodePublisher;
+import com.google.devtools.build.lib.util.CustomFailureDetailPublisher;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
+import com.google.devtools.build.lib.util.TestType;
 import com.google.devtools.build.lib.util.io.OutErr;
 import java.io.PrintStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 /**
  * Utility methods for handling crashes: we log the crash, optionally send a bug report, and then
  * terminate the jvm.
  *
- * <p> Note, code in this class must be extremely robust. There's nothing worse than a crash-handler
+ * <p>Note, code in this class must be extremely robust. There's nothing worse than a crash-handler
  * that itself crashes!
  */
-public abstract class BugReport {
+public final class BugReport {
 
-  private static final Logger logger = Logger.getLogger(BugReport.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   static final BugReporter REPORTER_INSTANCE = new DefaultBugReporter();
 
-  private static BlazeVersionInfo versionInfo = BlazeVersionInfo.instance();
+  private static final BlazeVersionInfo VERSION_INFO = BlazeVersionInfo.instance();
 
   private static BlazeRuntimeInterface runtime = null;
 
   @Nullable private static volatile Throwable unprocessedThrowableInTest = null;
   private static final Object LOCK = new Object();
 
-  private static final boolean IN_TEST = System.getenv("TEST_TMPDIR") != null;
-
   private static final boolean SHOULD_NOT_SEND_BUG_REPORT_BECAUSE_IN_TEST =
-      IN_TEST && System.getenv("ENABLE_BUG_REPORT_LOGGING_IN_TEST") == null;
+      TestType.isInTest() && System.getenv("ENABLE_BUG_REPORT_LOGGING_IN_TEST") == null;
 
   private BugReport() {}
 
@@ -68,12 +70,13 @@ public abstract class BugReport {
      * Perform all possible clean-up before crashing, posting events etc. so long as crashing isn't
      * significantly delayed or another crash isn't triggered.
      */
-    void cleanUpForCrash(ExitCode exitCode);
+    void cleanUpForCrash(DetailedExitCode exitCode);
   }
 
   public static void setRuntime(BlazeRuntimeInterface newRuntime) {
     Preconditions.checkNotNull(newRuntime);
-    Preconditions.checkState(runtime == null, "runtime already set: %s, %s", runtime, newRuntime);
+    Preconditions.checkState(
+        runtime == null || TestType.isInTest(), "runtime already set: %s, %s", runtime, newRuntime);
     runtime = newRuntime;
   }
 
@@ -86,7 +89,7 @@ public abstract class BugReport {
    * is about to block on thread completion that might hang because of a failed halt below.
    */
   public static void maybePropagateUnprocessedThrowableIfInTest() {
-    if (IN_TEST) {
+    if (TestType.isInTest()) {
       // Instead of the jvm having been halted, we might have a saved Throwable.
       synchronized (LOCK) {
         Throwable lastUnprocessedThrowableInTest = unprocessedThrowableInTest;
@@ -120,8 +123,8 @@ public abstract class BugReport {
       throw new IllegalStateException(
           "Bug reports in tests should crash: " + args + ", " + Arrays.toString(values), exception);
     }
-    if (!versionInfo.isReleasedBlaze()) {
-      logger.info("(Not a released binary; not logged.)");
+    if (!VERSION_INFO.isReleasedBlaze()) {
+      logger.atInfo().log("(Not a released binary; not logged.)");
       return;
     }
 
@@ -129,24 +132,32 @@ public abstract class BugReport {
   }
 
   private static void logCrash(Throwable throwable, boolean sendBugReport, String... args) {
-    logger.severe("Crash: " + throwable + " " + Throwables.getStackTraceAsString(throwable));
+    logger.atSevere().withCause(throwable).log("Crash");
     if (sendBugReport) {
       BugReport.sendBugReport(throwable, Arrays.asList(args));
     }
-    BugReport.printBug(OutErr.SYSTEM_OUT_ERR, throwable, /* oomMessage = */ null);
+    logThrowableToConsole(throwable);
+  }
+
+  private static void logThrowableToConsole(Throwable throwable) {
+    BugReport.printBug(OutErr.SYSTEM_OUT_ERR, throwable, /*oomMessage=*/ null);
     System.err.println("ERROR: " + getProductName() + " crash in async thread:");
     throwable.printStackTrace();
   }
 
   /**
-   * Print, log, send a bug report, and then cause the current Blaze command to fail with the
-   * specified exit code, and then cause the jvm to terminate.
+   * Print, log, and then cause the current Blaze command to fail with the specified exit code, and
+   * then cause the jvm to terminate.
    *
    * <p>Has no effect if another crash has already been handled by {@link BugReport}.
    */
-  public static void handleCrashWithoutSendingBugReport(
+  public static RuntimeException handleCrashWithoutSendingBugReport(
       Throwable throwable, ExitCode exitCode, String... args) {
-    handleCrash(throwable, /*sendBugReport=*/ false, exitCode, args);
+    throw handleCrash(
+        throwable,
+        /*sendBugReport=*/ false,
+        DetailedExitCode.of(exitCode, CrashFailureDetails.forThrowable(throwable)),
+        args);
   }
 
   /**
@@ -155,8 +166,13 @@ public abstract class BugReport {
    *
    * <p>Has no effect if another crash has already been handled by {@link BugReport}.
    */
-  public static void handleCrash(Throwable throwable, ExitCode exitCode, String... args) {
-    handleCrash(throwable, /*sendBugReport=*/ true, exitCode, args);
+  public static RuntimeException handleCrash(
+      Throwable throwable, ExitCode exitCode, String... args) {
+    throw handleCrash(
+        throwable,
+        /*sendBugReport=*/ true,
+        DetailedExitCode.of(exitCode, CrashFailureDetails.forThrowable(throwable)),
+        args);
   }
 
   /**
@@ -165,35 +181,56 @@ public abstract class BugReport {
    *
    * <p>Has no effect if another crash has already been handled by {@link BugReport}.
    */
-  public static void handleCrash(Throwable throwable, String... args) {
-    handleCrash(throwable, /*sendBugReport=*/ true, /*exitCode=*/ null, args);
+  public static RuntimeException handleCrash(Throwable throwable, String... args) {
+    throw handleCrash(
+        throwable,
+        /*sendBugReport=*/ true,
+        CrashFailureDetails.detailedExitCodeForThrowable(throwable),
+        args);
   }
 
-  private static void handleCrash(
-      Throwable throwable, boolean sendBugReport, @Nullable ExitCode exitCode, String... args) {
-    ExitCode exitCodeToUse = exitCode == null ? getExitCodeForThrowable(throwable) : exitCode;
-    int numericExitCode = exitCodeToUse.getNumericExitCode();
+  private static RuntimeException handleCrash(
+      Throwable throwable,
+      boolean sendBugReport,
+      DetailedExitCode detailedExitCode,
+      String... args) {
+    int numericExitCode = detailedExitCode.getExitCode().getNumericExitCode();
     try {
       synchronized (LOCK) {
-        if (IN_TEST) {
+        if (TestType.isInTest()) {
           unprocessedThrowableInTest = throwable;
         }
-        logCrash(throwable, sendBugReport, args);
+        // Don't try to send a bug report during a crash in a test, it will throw itself.
+        if (!TestType.isInTest() || !sendBugReport) {
+          logCrash(throwable, sendBugReport, args);
+        } else {
+          logThrowableToConsole(throwable);
+        }
+        // TODO(b/167592709): remove verbose logging when bug resolved.
+        logger.atInfo().log("Finished logging crash, runtime: %s", runtime);
         try {
           if (runtime != null) {
-            runtime.cleanUpForCrash(exitCodeToUse);
+            runtime.cleanUpForCrash(detailedExitCode);
           }
+          logger.atInfo().log("Finished runtime cleanup");
           CustomExitCodePublisher.maybeWriteExitStatusFile(numericExitCode);
+          logger.atInfo().log("Wrote exit status file");
+          CustomFailureDetailPublisher.maybeWriteFailureDetailFile(
+              detailedExitCode.getFailureDetail());
+          logger.atInfo().log("Wrote failure detail file");
         } finally {
+          logger.atInfo().log("Entered inner finally block");
           // Avoid shutdown deadlock issues: If an application shutdown hook crashes, it will
           // trigger our Blaze crash handler (this method). Calling System#exit() here, would
           // therefore induce a deadlock. This call would block on the shutdown sequence completing,
           // but the shutdown sequence would in turn be blocked on this thread finishing. Instead,
           // exit fast via halt().
           Runtime.getRuntime().halt(numericExitCode);
+          logger.atSevere().log("Failed to halt (inner block)!");
         }
       }
     } catch (Throwable t) {
+      logger.atSevere().withCause(t).log("Threw while crashing");
       System.err.println(
           "ERROR: A crash occurred while "
               + getProductName()
@@ -206,23 +243,20 @@ public abstract class BugReport {
 
       System.err.println("Exception encountered during BugReport#handleCrash:");
       t.printStackTrace(System.err);
-
+    } finally {
+      logger.atInfo().log("Entered outer finally block");
       Runtime.getRuntime().halt(numericExitCode);
+      logger.atSevere().log("Failed to halt (outer block)!");
     }
-  }
-
-  /** Get exit code corresponding to throwable. */
-  public static ExitCode getExitCodeForThrowable(Throwable throwable) {
-    return (Throwables.getRootCause(throwable) instanceof OutOfMemoryError)
-        ? ExitCode.OOM_ERROR
-        : ExitCode.BLAZE_INTERNAL_ERROR;
+    logger.atSevere().log("Failed to crash in handleCrash");
+    throw new IllegalStateException("never get here", throwable);
   }
 
   private static void printThrowableTo(OutErr outErr, Throwable e) {
     PrintStream err = new PrintStream(outErr.getErrorStream());
     e.printStackTrace(err);
     err.flush();
-    logger.log(Level.SEVERE, getProductName() + " crashed", e);
+    logger.atSevere().withCause(e).log("%s crashed", getProductName());
   }
 
   /**
@@ -231,18 +265,17 @@ public abstract class BugReport {
    * @param outErr where to write the output
    * @param e the exception thrown
    */
-  public static void printBug(OutErr outErr, Throwable e, String oomMessage) {
+  public static void printBug(OutErr outErr, Throwable e, @Nullable String oomMessage) {
     if (e instanceof OutOfMemoryError) {
-      outErr.printErr(
-          e.getMessage()
-              + "\n\nERROR: "
-              + getProductName()
-              + " ran out of memory and crashed."
-              + (isNullOrEmpty(oomMessage) ? "" : (" " + oomMessage))
-              + "\n");
+      outErr.printErr("ERROR: " + constructOomExitMessage(oomMessage));
     } else {
       printThrowableTo(outErr, e);
     }
+  }
+
+  public static String constructOomExitMessage(@Nullable String extraInfo) {
+    String msg = getProductName() + " ran out of memory and crashed.";
+    return isNullOrEmpty(extraInfo) ? msg : msg + " " + extraInfo;
   }
 
   /**
@@ -272,14 +305,14 @@ public abstract class BugReport {
   // Log the exception.  Because this method is only called in a blaze release,
   // this will result in a report being sent to a remote logging service.
   private static void logException(Throwable exception, List<String> args, String... values) {
-    logger.severe("Exception: " + Throwables.getStackTraceAsString(exception));
+    logger.atSevere().withCause(exception).log("Exception");
     // The preamble is used in the crash watcher, so don't change it
     // unless you know what you're doing.
-    String preamble = getProductName()
-        + (exception instanceof OutOfMemoryError ? " OOMError: " : " crashed with args: ");
+    String preamble =
+        getProductName()
+            + (exception instanceof OutOfMemoryError ? " OOMError: " : " crashed with args: ");
 
-    LoggingUtil.logToRemote(Level.SEVERE, preamble + Joiner.on(' ').join(args), exception,
-        values);
+    LoggingUtil.logToRemote(Level.SEVERE, preamble + Joiner.on(' ').join(args), exception, values);
   }
 
   private static class DefaultBugReporter implements BugReporter {
@@ -291,6 +324,11 @@ public abstract class BugReport {
     @Override
     public void sendBugReport(Throwable exception, List<String> args, String... values) {
       BugReport.sendBugReport(exception, args, values);
+    }
+
+    @Override
+    public RuntimeException handleCrash(Throwable throwable, String... args) {
+      throw BugReport.handleCrash(throwable, args);
     }
   }
 }

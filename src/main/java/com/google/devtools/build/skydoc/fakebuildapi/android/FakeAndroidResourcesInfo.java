@@ -15,14 +15,14 @@
 package com.google.devtools.build.skydoc.fakebuildapi.android;
 
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidManifestInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidResourcesInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.ValidatedAndroidDataApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
+import com.google.devtools.build.lib.starlarkbuildapi.FileApi;
+import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidManifestInfoApi;
+import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidResourcesInfoApi;
+import com.google.devtools.build.lib.starlarkbuildapi.android.ValidatedAndroidDataApi;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
 
 /** Fake implementation of {@link AndroidResourcesInfoApi}. */
 public class FakeAndroidResourcesInfo
@@ -132,8 +132,8 @@ public class FakeAndroidResourcesInfo
         Depset transitiveAapt2RTxt,
         Depset transitiveSymbolsBin,
         Depset transitiveCompiledSymbols,
-        Depset transitiveStaticLib,
-        Depset transitiveRTxt,
+        Object transitiveStaticLib,
+        Object transitiveRTxt,
         Object transitiveAapt2ValidationArtifacts)
         throws EvalException {
       return new FakeAndroidResourcesInfo();

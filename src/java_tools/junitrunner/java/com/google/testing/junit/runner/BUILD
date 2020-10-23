@@ -21,7 +21,6 @@ java_library(
         "BazelTestRunner.java",
         ":common_runner_java_files",
     ],
-    data = ["//tools:test_sharding_compliant"],
     deps = [
         ":persistent_test_runner",
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/internal",
@@ -38,7 +37,6 @@ java_binary(
     name = "persistent_test_runner",
     srcs = [
         "PersistentTestRunner.java",
-        "PersistentTestRunnerClassLoader.java",
         "SuiteTestRunner.java",
     ],
     deps = [
@@ -70,4 +68,5 @@ filegroup(
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/sharding:srcs",
         "//src/java_tools/junitrunner/java/com/google/testing/junit/runner/util:srcs",
     ],
+    visibility = ["//src:__subpackages__"],
 )

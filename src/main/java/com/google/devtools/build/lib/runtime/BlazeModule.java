@@ -15,12 +15,11 @@ package com.google.devtools.build.lib.runtime;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-import com.google.devtools.build.lib.actions.ExecutorInitException;
+import com.google.common.eventbus.SubscriberExceptionHandler;
+import com.google.devtools.build.lib.analysis.AnalysisResult;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -29,14 +28,16 @@ import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.exec.ExecutorBuilder;
-import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.PackageFactory;
-import com.google.devtools.build.lib.skyframe.AspectValue;
+import com.google.devtools.build.lib.exec.ModuleActionContextRegistry;
+import com.google.devtools.build.lib.exec.SpawnStrategyRegistry;
+import com.google.devtools.build.lib.packages.Package.Builder.PackageSettings;
+import com.google.devtools.build.lib.packages.PackageLoadingListener;
+import com.google.devtools.build.lib.packages.PackageValidator;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.TopDownActionCache;
 import com.google.devtools.build.lib.util.AbruptExitException;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.io.OutErr;
-import com.google.devtools.build.lib.vfs.DigestHashFunction.DefaultHashFunctionNotSetException;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.OutputService;
 import com.google.devtools.build.lib.vfs.Path;
@@ -68,15 +69,13 @@ public abstract class BlazeModule {
   }
 
   /**
-   * Called at the beginning of Bazel startup, before {@link #getFileSystem} and
-   * {@link #blazeStartup}.
+   * Called at the beginning of Bazel startup, before {@link #getFileSystem} and {@link
+   * #blazeStartup}.
    *
    * @param startupOptions the server's startup options
-   *
    * @throws AbruptExitException to shut down the server immediately
    */
-  public void globalInit(OptionsParsingResult startupOptions) throws AbruptExitException {
-  }
+  public void globalInit(OptionsParsingResult startupOptions) throws AbruptExitException {}
 
   /**
    * Returns the file system implementation used by Bazel. It is an error if more than one module
@@ -90,7 +89,7 @@ public abstract class BlazeModule {
    */
   public ModuleFileSystem getFileSystem(
       OptionsParsingResult startupOptions, PathFragment realExecRootBase)
-      throws AbruptExitException, DefaultHashFunctionNotSetException {
+      throws AbruptExitException {
     return null;
   }
 
@@ -112,7 +111,7 @@ public abstract class BlazeModule {
 
     /** Non-null if this filesystem virtualizes the execroot folder. */
     @Nullable
-    public abstract Path virtualExecRootBase();
+    abstract Path virtualExecRootBase();
 
     public static ModuleFileSystem create(
         FileSystem fileSystem, @Nullable Path virtualExecRootBase) {
@@ -125,15 +124,26 @@ public abstract class BlazeModule {
   }
 
   /**
+   * Returns handler for {@link com.google.common.eventbus.EventBus} subscriber and async thread
+   * exceptions. For async thread exceptions, {@link
+   * SubscriberExceptionHandler#handleException(Throwable,
+   * com.google.common.eventbus.SubscriberExceptionContext)} will be called with null {@link
+   * com.google.common.eventbus.SubscriberExceptionContext}. If all modules return null, a handler
+   * that crashes on all async exceptions and files bug reports for all EventBus subscriber
+   * exceptions will be used.
+   */
+  public SubscriberExceptionHandler getEventBusAndAsyncExceptionHandler() {
+    return null;
+  }
+
+  /**
    * Called when Bazel starts up after {@link #getStartupOptions}, {@link #globalInit}, and {@link
    * #getFileSystem}.
    *
    * @param startupOptions the server's startup options
    * @param versionInfo the Bazel version currently running
    * @param instanceId the id of the current Bazel server
-   * @param fileSystem
    * @param directories the install directory
-   * @param clock the clock
    * @throws AbruptExitException to shut down the server immediately
    */
   public void blazeStartup(
@@ -152,12 +162,10 @@ public abstract class BlazeModule {
    *
    * @param startupOptions the server startup options
    * @param builder builder class that collects the server configuration
-   *
    * @throws AbruptExitException to shut down the server immediately
    */
   public void serverInit(OptionsParsingResult startupOptions, ServerBuilder builder)
-      throws AbruptExitException {
-  }
+      throws AbruptExitException {}
 
   /**
    * Sets up the configured rule class provider, which contains the built-in rule classes, aspects,
@@ -181,8 +189,7 @@ public abstract class BlazeModule {
    * @param builder the workspace builder
    */
   public void workspaceInit(
-      BlazeRuntime runtime, BlazeDirectories directories, WorkspaceBuilder builder) {
-  }
+      BlazeRuntime runtime, BlazeDirectories directories, WorkspaceBuilder builder) {}
 
   /**
    * Called to notify modules that the given command is about to be executed. This allows capturing
@@ -205,8 +212,8 @@ public abstract class BlazeModule {
   }
 
   /**
-   * Returns the output service to be used. It is an error if more than one module returns an
-   * output service.
+   * Returns the output service to be used. It is an error if more than one module returns an output
+   * service.
    *
    * <p>This method will be called at the beginning of each command (after #beforeCommand).
    */
@@ -245,9 +252,7 @@ public abstract class BlazeModule {
     return ImmutableList.of();
   }
 
-  /**
-   * Returns extra options this module contributes to all commands.
-   */
+  /** Returns extra options this module contributes to all commands. */
   public Iterable<Class<? extends OptionsBase>> getCommonCommandOptions() {
     return ImmutableList.of();
   }
@@ -268,14 +273,13 @@ public abstract class BlazeModule {
    * @param env the command environment
    * @param request the build request
    * @param buildOptions the build's top-level options
-   * @param configuredTargets the build's requested top-level targets as {@link ConfiguredTarget}s
+   * @param analysisResult the build's analysis result
    */
   public void afterAnalysis(
       CommandEnvironment env,
       BuildRequest request,
       BuildOptions buildOptions,
-      Iterable<ConfiguredTarget> configuredTargets,
-      ImmutableSet<AspectValue> aspects)
+      AnalysisResult analysisResult)
       throws InterruptedException, ViewCreationFailedException {}
 
   /**
@@ -288,7 +292,39 @@ public abstract class BlazeModule {
    * @param builder the builder to add action context providers and consumers to
    */
   public void executorInit(CommandEnvironment env, BuildRequest request, ExecutorBuilder builder)
-      throws ExecutorInitException {}
+      throws AbruptExitException {}
+
+  /**
+   * Registers any action contexts this module provides with the execution phase. They will be
+   * available for {@linkplain
+   * com.google.devtools.build.lib.actions.ActionContext.ActionContextRegistry#getContext querying}
+   * to actions and other action contexts.
+   *
+   * <p>This method is invoked before actions are executed but after {@link #executorInit}.
+   *
+   * @param registryBuilder builder with which to register action contexts
+   * @param env environment for the current command
+   * @param buildRequest the current build request
+   * @throws AbruptExitException if there are fatal issues creating or registering action contexts
+   */
+  public void registerActionContexts(
+      ModuleActionContextRegistry.Builder registryBuilder,
+      CommandEnvironment env,
+      BuildRequest buildRequest)
+      throws AbruptExitException {}
+
+  /**
+   * Registers any spawn strategies this module provides with the execution phase.
+   *
+   * <p>This method is invoked before actions are executed but after {@link #executorInit}.
+   *
+   * @param registryBuilder builder with which to register strategies
+   * @param env environment for the current command
+   * @throws AbruptExitException if there are fatal issues creating or registering strategies
+   */
+  public void registerSpawnStrategies(
+      SpawnStrategyRegistry.Builder registryBuilder, CommandEnvironment env)
+      throws AbruptExitException, InterruptedException {}
 
   /**
    * Called after each command.
@@ -310,11 +346,10 @@ public abstract class BlazeModule {
   /**
    * Called when Blaze shuts down.
    *
-   * <p>If you are also implementing {@link #blazeShutdownOnCrash()}, consider putting the common
+   * <p>If you are also implementing {@link #blazeShutdownOnCrash}, consider putting the common
    * shutdown code in the latter and calling that other hook from here.
    */
-  public void blazeShutdown() {
-  }
+  public void blazeShutdown() {}
 
   /**
    * Called when Blaze shuts down due to a crash.
@@ -323,7 +358,7 @@ public abstract class BlazeModule {
    * number of things. Keep in mind that we are crashing so who knows what state we are in. Modules
    * rarely need to implement this.
    */
-  public void blazeShutdownOnCrash() {}
+  public void blazeShutdownOnCrash(DetailedExitCode exitCode) {}
 
   /**
    * Returns true if the module will arrange for a {@code BuildMetricsEvent} to be posted after the
@@ -349,12 +384,41 @@ public abstract class BlazeModule {
   }
 
   /**
-   * Returns a helper that the {@link PackageFactory} will use during package loading. If the module
-   * does not provide any helper, it should return null. Note that only one helper per Bazel/Blaze
-   * runtime is allowed.
+   * Returns {@link PackageSettings} for creating packages.
+   *
+   * <p>Called once during server startup some time after {@link #serverInit}.
+   *
+   * <p>Note that only one helper per Bazel/Blaze runtime is allowed.
    */
-  public Package.Builder.Helper getPackageBuilderHelper(
-      ConfiguredRuleClassProvider ruleClassProvider, FileSystem fs) {
+  @Nullable
+  public PackageSettings getPackageSettings() {
+    return null;
+  }
+
+  /**
+   * Returns a {@link PackageValidator} to be used to validate loaded packages, or null if the
+   * module does not provide any validator.
+   *
+   * <p>Called once during server startup some time after {@link #serverInit}.
+   *
+   * <p>Note that only one instance per Bazel/Blaze runtime is allowed.
+   */
+  @Nullable
+  public PackageValidator getPackageValidator() {
+    return null;
+  }
+
+  /**
+   * Returns a {@link PackageLoadingListener} for observing successful package loading, or null if
+   * the module does not provide any validator.
+   *
+   * <p>Called once during server startup some time after {@link #serverInit}.
+   */
+  @Nullable
+  public PackageLoadingListener getPackageLoadingListener(
+      PackageSettings packageSettings,
+      ConfiguredRuleClassProvider ruleClassProvider,
+      FileSystem fs) {
     return null;
   }
 
@@ -380,9 +444,7 @@ public abstract class BlazeModule {
     return null;
   }
 
-  /**
-   * Services provided for Blaze modules via BlazeRuntime.
-   */
+  /** Services provided for Blaze modules via BlazeRuntime. */
   public interface ModuleEnvironment {
     /**
      * Gets a file from the depot based on its label and returns the {@link Path} where it can be
@@ -393,12 +455,14 @@ public abstract class BlazeModule {
     @Nullable
     Path getFileFromWorkspace(Label label);
 
-    /**
-     * Exits Blaze as early as possible by sending an interrupt to the command's main thread.
-     */
+    /** Exits Blaze as early as possible by sending an interrupt to the command's main thread. */
     void exit(AbruptExitException exception);
   }
 
+  /**
+   * Provides additional precomputed values to inject into the skyframe graph. Called on every
+   * command execution.
+   */
   public ImmutableList<PrecomputedValue.Injected> getPrecomputedValues() {
     return ImmutableList.of();
   }

@@ -14,15 +14,18 @@
 package com.google.devtools.build.lib.packages;
 
 import com.google.common.collect.ImmutableCollection;
-import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.syntax.CallUtils;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.syntax.Location;
 
 /**
  * Abstract base class for implementations of {@link StructImpl} that expose
- * StarlarkCallable-annotated fields (not just methods) to Starlark code.
+ * StarlarkCallable-annotated fields (not just methods) to Starlark code. Subclasses must be
+ * immutable.
  */
+@Immutable
 public abstract class NativeInfo extends StructImpl {
 
   protected NativeInfo(Provider provider) {
@@ -33,16 +36,31 @@ public abstract class NativeInfo extends StructImpl {
     super(provider, loc);
   }
 
+  @Override
+  public boolean isImmutable() {
+    return true; // immutable and Starlark-hashable
+  }
+
   // TODO(adonovan): logically this should be a parameter of getValue
   // and getFieldNames or an instance field of this object.
-  private static final StarlarkSemantics SEMANTICS = StarlarkSemantics.DEFAULT_SEMANTICS;
+  private static final StarlarkSemantics SEMANTICS = StarlarkSemantics.DEFAULT;
 
   @Override
   public Object getValue(String name) throws EvalException {
-    // @SkylarkCallable(structField=true) -- Java field
+    // TODO(adonovan): this seems unnecessarily complicated:
+    // Starlark's x.name and getattr(x, name) already check the
+    // annotated fields/methods first, so there's no need to handle them here.
+    // Similarly, Starlark.dir checks annotated fields/methods first, so
+    // there's no need for getFieldNames to report them.
+    // The only code that would notice any difference is direct Java
+    // calls to getValue/getField names; they should instead
+    // use getattr and dir. However, dir does report methods,
+    // not just fields.
+
+    // @StarlarkMethod(structField=true) -- Java field
     if (getFieldNames().contains(name)) {
       try {
-        return CallUtils.getField(SEMANTICS, this, name);
+        return Starlark.getAnnotatedField(SEMANTICS, this, name);
       } catch (InterruptedException exception) {
         // Struct fields on NativeInfo objects are supposed to behave well and not throw
         // exceptions, as they should be logicless field accessors. If this occurs, it's
@@ -59,6 +77,6 @@ public abstract class NativeInfo extends StructImpl {
 
   @Override
   public ImmutableCollection<String> getFieldNames() {
-    return CallUtils.getFieldNames(SEMANTICS, this);
+    return Starlark.getAnnotatedFieldNames(SEMANTICS, this);
   }
 }

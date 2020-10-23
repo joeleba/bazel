@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
 import com.google.devtools.build.skyframe.KeyToConsolidate.Op;
 import com.google.devtools.build.skyframe.KeyToConsolidate.OpToStoreBare;
+import com.google.errorprone.annotations.ForOverride;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -211,8 +212,8 @@ public class InMemoryNodeEntry implements NodeEntry {
   }
 
   @Override
-  public int getNumberOfDirectDepGroups() {
-    return GroupedList.numGroups(getCompressedDirectDepsForDoneEntry());
+  public boolean hasAtLeastOneDep() {
+    return GroupedList.numGroups(getCompressedDirectDepsForDoneEntry()) > 0;
   }
 
   /** Returns the compressed {@link GroupedList} of direct deps. Can only be called when done. */
@@ -490,17 +491,36 @@ public class InMemoryNodeEntry implements NodeEntry {
     Preconditions.checkState(keepEdges() == KeepEdgesPolicy.ALL, "Not keeping rdeps: %s", this);
   }
 
+  /**
+   * Creates a {@link DirtyBuildingState} for the case where this node is done and is being marked
+   * dirty.
+   */
+  @ForOverride
+  protected DirtyBuildingState createDirtyBuildingStateForDoneNode(
+      DirtyType dirtyType, GroupedList<SkyKey> directDeps, SkyValue value) {
+    return DirtyBuildingState.create(dirtyType, directDeps, value);
+  }
+
+  private static final GroupedList<SkyKey> EMPTY_LIST = new GroupedList<>();
+
   @Override
   public synchronized MarkedDirtyResult markDirty(DirtyType dirtyType) {
-    // Can't process a dirty node without its deps.
-    assertKeepDeps();
+    if (!DirtyType.FORCE_REBUILD.equals(dirtyType)) {
+      // A node can't be found to be dirty without deps unless it's force-rebuilt.
+      assertKeepDeps();
+    }
     if (isDone()) {
-      dirtyBuildingState =
-          DirtyBuildingState.create(
-              dirtyType, GroupedList.create(getCompressedDirectDepsForDoneEntry()), value);
+      GroupedList<SkyKey> directDeps =
+          KeepEdgesPolicy.NONE.equals(keepEdges())
+              ? EMPTY_LIST
+              : GroupedList.create(getCompressedDirectDepsForDoneEntry());
+      dirtyBuildingState = createDirtyBuildingStateForDoneNode(dirtyType, directDeps, value);
       value = null;
-      directDeps = null;
-      return new MarkedDirtyResult(ReverseDepsUtility.getReverseDeps(this));
+      this.directDeps = null;
+      return new MarkedDirtyResult(
+          KeepEdgesPolicy.ALL.equals(keepEdges())
+              ? ReverseDepsUtility.getReverseDeps(this)
+              : ImmutableList.of());
     }
     if (dirtyType.equals(DirtyType.FORCE_REBUILD)) {
       if (dirtyBuildingState != null) {

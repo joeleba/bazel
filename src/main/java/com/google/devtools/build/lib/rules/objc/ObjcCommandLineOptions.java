@@ -100,13 +100,12 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   public boolean generateLinkmap;
 
   @Option(
-    name = "objccopt",
-    allowMultiple = true,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
-    help = "Additional options to pass to Objective C compilation."
-  )
+      name = "objccopt",
+      allowMultiple = true,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
+      help = "Additional options to pass to Objective C compilation.")
   public List<String> copts;
 
   @Option(
@@ -159,23 +158,6 @@ public class ObjcCommandLineOptions extends FragmentOptions {
               + "strippings will be performed if both this flag and --compilation_mode=opt are "
               + "specified.")
   public boolean enableBinaryStripping;
-
-  @Option(
-    name = "apple_generate_dsym",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.ACTION_COMMAND_LINES},
-    help = "Whether to generate debug symbol(.dSYM) file(s)."
-  )
-  public boolean appleGenerateDsym;
-
-  @Option(
-      name = "apple_enable_auto_dsym_dbg",
-      defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.ACTION_COMMAND_LINES},
-      help = "Whether to force enable generating debug symbol(.dSYM) file(s) for dbg builds.")
-  public boolean appleEnableAutoDsymDbg;
 
   @Option(
     name = "ios_signing_cert_name",
@@ -244,17 +226,6 @@ public class ObjcCommandLineOptions extends FragmentOptions {
   public boolean scanIncludes;
 
   @Option(
-      name = "objc_header_scanner_tool",
-      defaultValue = "@bazel_tools//tools/objc:header_scanner",
-      converter = LabelConverter.class,
-      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
-      effectTags = {OptionEffectTag.CHANGES_INPUTS},
-      help =
-          "Location of tool to scan Objective-C code for inclusions and output a .headers_list "
-              + "file.")
-  public Label objcHeaderScannerTool;
-
-  @Option(
     name = "apple_sdk",
     defaultValue = "null",
     converter = LabelConverter.class,
@@ -265,4 +236,38 @@ public class ObjcCommandLineOptions extends FragmentOptions {
             + "configuration."
   )
   public Label appleSdk;
+
+  @Option(
+      name = "incompatible_objc_compile_info_migration",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.CHANGES_INPUTS},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES,
+      },
+      help =
+          "If true, native rules can assume compile info has been migrated to CcInfo. See "
+              + "https://github.com/bazelbuild/bazel/issues/10854 for details and migration "
+              + "instructions")
+  public boolean incompatibleObjcCompileInfoMigration;
+
+  @Option(
+      name = "incompatible_avoid_hardcoded_objc_compilation_flags",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {
+        OptionEffectTag.AFFECTS_OUTPUTS,
+        OptionEffectTag.BAZEL_INTERNAL_CONFIGURATION,
+        OptionEffectTag.EXECUTION,
+        OptionEffectTag.ACTION_COMMAND_LINES,
+      },
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES,
+      },
+      help =
+          "Prevents Bazel from adding compiler options to Objective-C compilation actions. Options"
+              + " set in the crosstool are still applied.")
+  public boolean incompatibleAvoidHardcodedObjcCompilationFlags;
 }

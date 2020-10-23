@@ -17,7 +17,6 @@ package com.google.devtools.build.buildjar;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.buildjar.OptionsParser.ReduceClasspathMode;
 import com.google.devtools.build.buildjar.javac.BlazeJavacResult;
-import com.google.devtools.build.buildjar.javac.FormattedDiagnostic;
 import com.google.devtools.build.buildjar.javac.JavacRunner;
 import com.google.devtools.build.buildjar.javac.statistics.BlazeJavacStatistics;
 import java.io.IOException;
@@ -57,8 +56,7 @@ public class ReducedClasspathJavaLibraryBuilder extends SimpleJavaLibraryBuilder
         javacRunner.invokeJavac(build.toBlazeJavacArguments(compressedClasspath));
 
     // If javac errored out because of missing entries on the classpath, give it another try.
-    // TODO(b/119712048): check performance impact of additional retries.
-    boolean fallback = shouldFallBack(result);
+    boolean fallback = !result.isOk();
     if (fallback) {
       if (build.reduceClasspathMode() == ReduceClasspathMode.BAZEL_REDUCED) {
         return BlazeJavacResult.fallback();
@@ -103,18 +101,5 @@ public class ReducedClasspathJavaLibraryBuilder extends SimpleJavaLibraryBuilder
 
     // Fall back to the regular compile, but add extra checks to catch transitive uses
     return javacRunner.invokeJavac(build.toBlazeJavacArguments(build.getClassPath()));
-  }
-
-  private static boolean shouldFallBack(BlazeJavacResult result) {
-    if (result.isOk()) {
-      return false;
-    }
-    if (result.diagnostics().stream().anyMatch(FormattedDiagnostic::maybeReducedClasspathError)) {
-      return true;
-    }
-    if (result.output().contains("com.sun.tools.javac.code.Symbol$CompletionFailure")) {
-      return true;
-    }
-    return false;
   }
 }

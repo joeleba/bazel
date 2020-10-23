@@ -19,24 +19,24 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.platform.ConstraintCollection.DuplicateConstraintException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
-import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformInfoApi;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.lib.starlarkbuildapi.platform.PlatformInfoApi;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.StringUtilities;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
 
 /** Provider for a platform, which is a group of constraints and values. */
 @Immutable
@@ -51,8 +51,8 @@ public class PlatformInfo extends NativeInfo
    */
   public static final String PARENT_REMOTE_EXECUTION_KEY = "{PARENT_REMOTE_EXECUTION_PROPERTIES}";
 
-  /** Name used in Skylark for accessing this provider. */
-  public static final String SKYLARK_NAME = "PlatformInfo";
+  /** Name used in Starlark for accessing this provider. */
+  public static final String STARLARK_NAME = "PlatformInfo";
 
   /** Provider singleton constant. */
   public static final BuiltinProvider<PlatformInfo> PROVIDER = new Provider();
@@ -62,7 +62,7 @@ public class PlatformInfo extends NativeInfo
       implements PlatformInfoApi.Provider<
           ConstraintSettingInfo, ConstraintValueInfo, PlatformInfo> {
     private Provider() {
-      super(SKYLARK_NAME, PlatformInfo.class);
+      super(STARLARK_NAME, PlatformInfo.class);
     }
 
     @Override
@@ -80,11 +80,12 @@ public class PlatformInfo extends NativeInfo
       }
       if (!constraintValuesUnchecked.isEmpty()) {
         builder.addConstraints(
-            constraintValuesUnchecked.getContents(ConstraintValueInfo.class, "constraint_values"));
+            Sequence.cast(
+                constraintValuesUnchecked, ConstraintValueInfo.class, "constraint_values"));
       }
       if (execPropertiesUnchecked != null) {
-        Map<String, String> execProperties =
-            Dict.castSkylarkDictOrNoneToDict(
+        Dict<String, String> execProperties =
+            Dict.noneableCast(
                 execPropertiesUnchecked, String.class, String.class, "exec_properties");
         builder.setExecProperties(ImmutableMap.copyOf(execProperties));
       }
@@ -93,7 +94,7 @@ public class PlatformInfo extends NativeInfo
       try {
         return builder.build();
       } catch (DuplicateConstraintException | ExecPropertiesException e) {
-        throw new EvalException(null, e);
+        throw new EvalException(e);
       }
     }
   }
@@ -142,7 +143,8 @@ public class PlatformInfo extends NativeInfo
 
   @Override
   public void repr(Printer printer) {
-    printer.format("PlatformInfo(%s, constraints=%s)", label.toString(), constraints.toString());
+    Printer.format(
+        printer, "PlatformInfo(%s, constraints=%s)", label.toString(), constraints.toString());
   }
 
   /** Returns a new {@link Builder} for creating a fresh {@link PlatformInfo} instance. */

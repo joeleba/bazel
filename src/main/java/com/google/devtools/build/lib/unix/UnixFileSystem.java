@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.unix.NativePosixFiles.Dirents;
 import com.google.devtools.build.lib.unix.NativePosixFiles.ReadTypes;
 import com.google.devtools.build.lib.vfs.AbstractFileSystemWithCustomStat;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
-import com.google.devtools.build.lib.vfs.DigestHashFunction.DefaultHashFunctionNotSetException;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.Path;
@@ -45,11 +44,11 @@ import java.util.List;
  */
 @ThreadSafe
 public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
+  protected final String hashAttributeName;
 
-  public UnixFileSystem() throws DefaultHashFunctionNotSetException {}
-
-  public UnixFileSystem(DigestHashFunction hashFunction) {
+  public UnixFileSystem(DigestHashFunction hashFunction, String hashAttributeName) {
     super(hashFunction);
+    this.hashAttributeName = hashAttributeName;
   }
 
   /**
@@ -408,6 +407,13 @@ public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
   }
 
   @Override
+  protected byte[] getFastDigest(Path path) throws IOException {
+    // Attempt to obtain the digest from an extended attribute attached to the file. This is much
+    // faster than reading and digesting the file's contents on the fly, especially for large files.
+    return hashAttributeName.isEmpty() ? null : getxattr(path, hashAttributeName, true);
+  }
+
+  @Override
   protected byte[] getDigest(Path path) throws IOException {
     String name = path.toString();
     long startTime = Profiler.nanoTimeMaybe();
@@ -511,6 +517,8 @@ public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
     }
 
     @Override
+    @SuppressWarnings(
+        "UnsafeFinalization") // Finalizer invokes close; close and write are synchronized.
     public synchronized void write(byte[] b, int off, int len) throws IOException {
       if (closed) {
         throw new IOException("attempt to write to a closed Outputstream backed by a native file");

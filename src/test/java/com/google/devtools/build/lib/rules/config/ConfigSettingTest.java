@@ -18,10 +18,10 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
+import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -74,15 +74,15 @@ public class ConfigSettingTest extends BuildViewTestCase {
         OptionsParser.getOptionDefinitionByName(DummyTestOptions.class, "nonselectable_option");
 
     @Option(
-        name = "nonselectable_whitelisted_option",
+        name = "nonselectable_allowlisted_option",
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
         effectTags = {OptionEffectTag.NO_OP},
         defaultValue = "true")
-    public boolean nonselectableWhitelistedOption;
+    public boolean nonselectableAllowlistedOption;
 
-    private static final OptionDefinition NONSELECTABLE_WHITELISTED_OPTION_DEFINITION =
+    private static final OptionDefinition NONSELECTABLE_ALLOWLISTED_OPTION_DEFINITION =
         OptionsParser.getOptionDefinitionByName(
-            DummyTestOptions.class, "nonselectable_whitelisted_option");
+            DummyTestOptions.class, "nonselectable_allowlisted_option");
 
     @Option(
         name = "nonselectable_custom_message_option",
@@ -100,7 +100,7 @@ public class ConfigSettingTest extends BuildViewTestCase {
       return ImmutableMap.of(
           NONSELECTABLE_OPTION_DEFINITION,
           new SelectRestriction(/*visibleWithinToolsPackage=*/ false, /*errorMessage=*/ null),
-          NONSELECTABLE_WHITELISTED_OPTION_DEFINITION,
+          NONSELECTABLE_ALLOWLISTED_OPTION_DEFINITION,
           new SelectRestriction(/*visibleWithinToolsPackage=*/ true, /*errorMessage=*/ null),
           NONSELECTABLE_CUSTOM_MESSAGE_OPTION_DEFINITION,
           new SelectRestriction(
@@ -110,16 +110,16 @@ public class ConfigSettingTest extends BuildViewTestCase {
   }
 
   @AutoCodec
-  static class DummyTestOptionsFragment extends BuildConfiguration.Fragment {}
+  static class DummyTestOptionsFragment extends Fragment {}
 
   private static class DummyTestOptionsLoader implements ConfigurationFragmentFactory {
     @Override
-    public BuildConfiguration.Fragment create(BuildOptions buildOptions) {
+    public Fragment create(BuildOptions buildOptions) {
       return new DummyTestOptionsFragment();
     }
 
     @Override
-    public Class<? extends BuildConfiguration.Fragment> creates() {
+    public Class<? extends Fragment> creates() {
       return DummyTestOptionsFragment.class;
     }
 
@@ -130,7 +130,7 @@ public class ConfigSettingTest extends BuildViewTestCase {
   }
 
   @Override
-  protected ConfiguredRuleClassProvider getRuleClassProvider() {
+  protected ConfiguredRuleClassProvider createRuleClassProvider() {
     ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
     TestRuleClassProvider.addStandardRules(builder);
     builder.addRuleDefinition(new FeatureFlagSetterRule());
@@ -287,34 +287,34 @@ public class ConfigSettingTest extends BuildViewTestCase {
   }
 
   /**
-   * Tests that whitelisted non-selectable options can't be accessed outside of the tools package.
+   * Tests that allowlisted non-selectable options can't be accessed outside of the tools package.
    */
   @Test
-  public void nonselectableWhitelistedOption_OutOfToolsPackage() throws Exception {
+  public void nonselectableAllowlistedOption_OutOfToolsPackage() throws Exception {
     checkError(
         "foo",
         "badoption",
         String.format(
-            "option 'nonselectable_whitelisted_option' cannot be used in a config_setting (it is "
-                + "whitelisted to %s//tools/... only)",
+            "option 'nonselectable_allowlisted_option' cannot be used in a config_setting (it is "
+                + "allowlisted to %s//tools/... only)",
             RepositoryName.create(TestConstants.TOOLS_REPOSITORY).getDefaultCanonicalForm()),
         "config_setting(",
         "    name = 'badoption',",
         "    values = {",
-        "        'nonselectable_whitelisted_option': 'true',",
+        "        'nonselectable_allowlisted_option': 'true',",
         "    },",
         ")");
   }
 
-  /** Tests that whitelisted non-selectable options can be accessed within the tools package. */
+  /** Tests that allowlisted non-selectable options can be accessed within the tools package. */
   @Test
-  public void nonselectableWhitelistedOption_InToolsPackage() throws Exception {
+  public void nonselectableAllowlistedOption_InToolsPackage() throws Exception {
     scratch.file(
         TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/pkg/BUILD",
         "config_setting(",
         "    name = 'foo',",
         "    values = {",
-        "        'nonselectable_whitelisted_option': 'true',",
+        "        'nonselectable_allowlisted_option': 'true',",
         "    })");
     String fooLabel = TestConstants.TOOLS_REPOSITORY + "//tools/pkg:foo";
     assertThat(getConfigMatchingProvider(fooLabel).matches()).isTrue();
@@ -342,7 +342,7 @@ public class ConfigSettingTest extends BuildViewTestCase {
     checkError(
         "foo",
         "none",
-        "ERROR /workspace/foo/BUILD:1:1: //foo:none: "
+        "ERROR /workspace/foo/BUILD:1:15: //foo:none: "
             + "expected value of type 'string' for dict value element, but got None (NoneType)",
         "config_setting(",
         "    name = 'none',",
@@ -388,6 +388,20 @@ public class ConfigSettingTest extends BuildViewTestCase {
     assertThat(getConfigMatchingProvider("//test:match").matches()).isFalse();
     useConfiguration("--define", "foo=nope", "--define", "bar=baz", "--define", "foo=bar");
     assertThat(getConfigMatchingProvider("//test:match").matches()).isTrue();
+  }
+
+  @Test
+  public void invalidDefineProducesError() throws Exception {
+    scratch.file(
+        "test/BUILD",
+        "config_setting(",
+        "    name = 'match',",
+        "    values = {",
+        "        'define': 'foo',", // Value should be "foo=<something>".
+        "    })");
+
+    checkError(
+        "//test:match", "Variable definitions must be in the form of a 'name=value' assignment");
   }
 
   @Test
@@ -1393,8 +1407,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettings_matchesFromDefault() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
-
     scratch.file(
         "test/build_settings.bzl",
         "def _impl(ctx):",
@@ -1415,7 +1427,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettings_matchesFromCommandLine() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
     useConfiguration(ImmutableMap.of("//test:cheese", "gouda"));
 
     scratch.file(
@@ -1442,8 +1453,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
    */
   @Test
   public void buildsettings_convertedType() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
-
     scratch.file(
         "test/build_settings.bzl",
         "def _impl(ctx):",
@@ -1464,7 +1473,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettings_doesntMatch() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
     useConfiguration(ImmutableMap.of("//test:cheese", "gouda"));
 
     scratch.file(
@@ -1487,8 +1495,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettings_badType() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
-
     scratch.file(
         "test/build_settings.bzl",
         "def _impl(ctx):",
@@ -1512,8 +1518,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void notBuildSettingOrFeatureFlag() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
-
     scratch.file(
         "test/rules.bzl",
         "def _impl(ctx):",
@@ -1538,7 +1542,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettingsMatch_featureFlagsMatch() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
     useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
 
     scratch.file(
@@ -1568,7 +1571,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettingsMatch_featureFlagsDontMatch() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
     useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
 
     scratch.file(
@@ -1598,7 +1600,6 @@ public class ConfigSettingTest extends BuildViewTestCase {
 
   @Test
   public void buildsettingsDontMatch_featureFlagsMatch() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_build_setting_api=true");
     useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
 
     scratch.file(
@@ -1951,5 +1952,66 @@ public class ConfigSettingTest extends BuildViewTestCase {
     assertThat(getConfigMatchingProvider("//test:matches_one").matches()).isTrue();
     assertThat(getConfigMatchingProvider("//test:matches_two").matches()).isTrue();
     assertThat(getConfigMatchingProvider("//test:doesntmatch").matches()).isFalse();
+  }
+
+  @Test
+  public void canOnlyMatchSingleValueInMultiValueFlags() throws Exception {
+    scratch.file(
+        "test/build_settings.bzl",
+        "def _impl(ctx):",
+        "  return []",
+        "string_list_flag = rule(",
+        "  implementation = _impl,",
+        "  build_setting = config.string_list(flag = True))");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:build_settings.bzl', 'string_list_flag')",
+        "string_list_flag(name = 'gouda', build_setting_default = ['smoked'])",
+        "config_setting(",
+        "    name = 'match',",
+        "    flag_values = {",
+        "        ':gouda': 'smoked,fresh',",
+        "    },",
+        ")",
+        "filegroup(",
+        "  name = 'fg',",
+        "  srcs = select({",
+        "      ':match': []",
+        "  }),",
+        ")");
+    reporter.removeHandler(failFastHandler); // expect errors
+    assertThat(getConfiguredTarget("//test:fg")).isNull();
+    assertContainsEvent(
+        "\"smoked,fresh\" not a valid value for flag //test:gouda. "
+            + "Only single, exact values are allowed");
+  }
+
+  @Test
+  public void singleValueThatLooksLikeMultiValueIsOkay() throws Exception {
+    scratch.file(
+        "test/build_settings.bzl",
+        "def _impl(ctx):",
+        "  return []",
+        "string_flag = rule(",
+        "  implementation = _impl,",
+        "  build_setting = config.string(flag = True))");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:build_settings.bzl', 'string_flag')",
+        "string_flag(name = 'gouda', build_setting_default = 'smoked,fresh')",
+        "config_setting(",
+        "    name = 'match',",
+        "    flag_values = {",
+        "        ':gouda': 'smoked,fresh',",
+        "    },",
+        ")",
+        "filegroup(",
+        "  name = 'fg',",
+        "  srcs = select({",
+        "      ':match': []",
+        "  }),",
+        ")");
+    assertThat(getConfiguredTarget("//test:fg")).isNotNull();
+    assertNoEvents();
   }
 }

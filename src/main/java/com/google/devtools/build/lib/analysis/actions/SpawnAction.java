@@ -14,10 +14,12 @@
 
 package com.google.devtools.build.lib.analysis.actions;
 
+import static com.google.devtools.build.lib.analysis.ToolchainCollection.DEFAULT_EXEC_GROUP_NAME;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
-import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -46,7 +48,6 @@ import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
 import com.google.devtools.build.lib.actions.CommandLines.ExpandedCommandLines;
 import com.google.devtools.build.lib.actions.CompositeRunfilesSupplier;
 import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
-import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
@@ -56,30 +57,30 @@ import com.google.devtools.build.lib.actions.SingleStringArgFormatter;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.actions.extra.SpawnInfo;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.skylark.Args;
+import com.google.devtools.build.lib.analysis.starlark.Args;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.skylarkbuildapi.CommandLineArgsApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.StarlarkList;
+import com.google.devtools.build.lib.exec.SpawnStrategyResolver;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.Spawn.Code;
+import com.google.devtools.build.lib.starlarkbuildapi.CommandLineArgsApi;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.LazyString;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CompileTimeConstant;
+import com.google.errorprone.annotations.DoNotCall;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -87,6 +88,9 @@ import java.util.Map;
 import java.util.function.Consumer;
 import javax.annotation.CheckReturnValue;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkList;
 
 /** An Action representing an arbitrary subprocess to be forked and exec'd. */
 public class SpawnAction extends AbstractAction implements CommandAction {
@@ -253,11 +257,11 @@ public class SpawnAction extends AbstractAction implements CommandAction {
   }
 
   @Override
-  public Sequence<String> getSkylarkArgv() throws EvalException {
+  public Sequence<String> getStarlarkArgv() throws EvalException {
     try {
       return StarlarkList.immutableCopyOf(getArguments());
-    } catch (CommandLineExpansionException exception) {
-      throw new EvalException(Location.BUILTIN, exception);
+    } catch (CommandLineExpansionException ex) {
+      throw new EvalException(ex);
     }
   }
 
@@ -295,7 +299,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
   }
 
   /** Hook for subclasses to perform work before the spawn is executed. */
-  protected void beforeExecute(ActionExecutionContext actionExecutionContext) throws IOException {}
+  protected void beforeExecute(ActionExecutionContext actionExecutionContext)
+      throws ExecException {}
 
   /**
    * Hook for subclasses to perform work after the spawn is executed. This method is only executed
@@ -304,7 +309,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
    */
   protected void afterExecute(
       ActionExecutionContext actionExecutionContext, List<SpawnResult> spawnResults)
-      throws IOException, ExecException {}
+      throws ExecException {}
 
   @Override
   public final ActionContinuationOrResult beginExecution(
@@ -314,55 +319,27 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     try {
       beforeExecute(actionExecutionContext);
       spawn = getSpawn(actionExecutionContext);
-    } catch (IOException e) {
-      throw toActionExecutionException(
-          new EnvironmentalExecException(e), actionExecutionContext.getVerboseFailures());
+    } catch (ExecException e) {
+      throw e.toActionExecutionException(this);
     } catch (CommandLineExpansionException e) {
-      throw new ActionExecutionException(e, this, /*catastrophe=*/ false);
+      throw createCommandLineException(e);
     }
     SpawnContinuation spawnContinuation =
         actionExecutionContext
-            .getContext(SpawnStrategy.class)
+            .getContext(SpawnStrategyResolver.class)
             .beginExecution(spawn, actionExecutionContext);
     return new SpawnActionContinuation(actionExecutionContext, spawnContinuation);
   }
 
-  private ActionExecutionException toActionExecutionException(
-      ExecException e, boolean verboseFailures) {
-    String failMessage;
-    if (isShellCommand()) {
-      // The possible reasons it could fail are: shell executable not found, shell
-      // exited non-zero, or shell died from signal.  The first is impossible
-      // and the second two aren't very interesting, so in the interests of
-      // keeping the noise-level down, we don't print a reason why, just the
-      // command that failed.
-      //
-      // 0=shell executable, 1=shell command switch, 2=command
-      try {
-        failMessage =
-            "error executing shell command: "
-                + "'"
-                + truncate(Joiner.on(" ").join(getArguments()), 200)
-                + "'";
-      } catch (CommandLineExpansionException commandLineExpansionException) {
-        failMessage =
-            "error executing shell command, and error expanding command line: "
-                + commandLineExpansionException;
-      }
-    } else {
-      failMessage = getRawProgressMessage();
-    }
-    return e.toActionExecutionException(failMessage, verboseFailures, this);
-  }
-
-  /**
-   * Returns s, truncated to no more than maxLen characters, appending an
-   * ellipsis if truncation occurred.
-   */
-  private static String truncate(String s, int maxLen) {
-    return s.length() > maxLen
-        ? s.substring(0, maxLen - "...".length()) + "..."
-        : s;
+  private ActionExecutionException createCommandLineException(CommandLineExpansionException e) {
+    DetailedExitCode detailedExitCode =
+        DetailedExitCode.of(
+            FailureDetail.newBuilder()
+                .setMessage(Strings.nullToEmpty(e.getMessage()))
+                .setSpawn(
+                    FailureDetails.Spawn.newBuilder().setCode(Code.COMMAND_LINE_EXPANSION_FAILURE))
+                .build());
+    return new ActionExecutionException(e, this, /*catastrophe=*/ false, detailedExitCode);
   }
 
   /**
@@ -419,10 +396,13 @@ public class SpawnAction extends AbstractAction implements CommandAction {
   }
 
   @Override
-  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp)
+  protected void computeKey(
+      ActionKeyContext actionKeyContext,
+      @Nullable ArtifactExpander artifactExpander,
+      Fingerprint fp)
       throws CommandLineExpansionException {
     fp.addString(GUID);
-    commandLines.addToFingerprint(actionKeyContext, fp);
+    commandLines.addToFingerprint(actionKeyContext, artifactExpander, fp);
     fp.addString(getMnemonic());
     // We don't need the toolManifests here, because they are a subset of the inputManifests by
     // definition and the output of an action shouldn't change whether something is considered a
@@ -620,6 +600,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     private String mnemonic = "Unknown";
     protected ExtraActionInfoSupplier extraActionInfoSupplier = null;
     private boolean disableSandboxing = false;
+    private String execGroup = DEFAULT_EXEC_GROUP_NAME;
 
     private Consumer<Pair<ActionExecutionContext, List<SpawnResult>>> resultConsumer = null;
 
@@ -667,7 +648,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
      */
     @CheckReturnValue
     public Action[] build(ActionConstructionContext context) {
-      return build(context.getActionOwner(), context.getConfiguration());
+      return build(context.getActionOwner(execGroup), context.getConfiguration());
     }
 
     @VisibleForTesting @CheckReturnValue
@@ -844,7 +825,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
 
     /** @deprecated Use {@link #addTransitiveInputs} to avoid excessive memory use. */
     @Deprecated
-    public Builder addInputs(NestedSet<Artifact> artifacts) {
+    @DoNotCall
+    public final Builder addInputs(NestedSet<Artifact> artifacts) {
       // Do not delete this method, or else addInputs(Iterable) calls with a NestedSet argument
       // will not be flagged.
       inputsBuilder.addAll(artifacts.toList());
@@ -1270,6 +1252,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
       return this;
     }
 
+    /** @throws IllegalArgumentException if the mnemonic is invalid. */
     public Builder setMnemonic(String mnemonic) {
       Preconditions.checkArgument(
           !mnemonic.isEmpty() && CharMatcher.javaLetterOrDigit().matchesAllOf(mnemonic),
@@ -1286,6 +1269,16 @@ public class SpawnAction extends AbstractAction implements CommandAction {
 
     public Builder disableSandboxing() {
       this.disableSandboxing = true;
+      return this;
+    }
+
+    /**
+     * Sets the exec group for this action by name. This does not check that {@code execGroup} is
+     * being set to a valid exec group (i.e. one that actually exists). This method expects callers
+     * to do that work.
+     */
+    public Builder setExecGroup(String execGroup) {
+      this.execGroup = execGroup;
       return this;
     }
 
@@ -1373,11 +1366,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
           return ActionContinuationOrResult.of(ActionResult.create(nextContinuation.get()));
         }
         return new SpawnActionContinuation(actionExecutionContext, nextContinuation);
-      } catch (IOException e) {
-        throw toActionExecutionException(
-            new EnvironmentalExecException(e), actionExecutionContext.getVerboseFailures());
       } catch (ExecException e) {
-        throw toActionExecutionException(e, actionExecutionContext.getVerboseFailures());
+        throw e.toActionExecutionException(SpawnAction.this);
       }
     }
   }

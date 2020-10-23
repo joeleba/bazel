@@ -20,22 +20,27 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL;
 import static com.google.devtools.build.lib.packages.Type.STRING;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
+import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
 import com.google.devtools.build.lib.packages.AttributeTransitionData;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
+import java.util.Map;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -97,7 +102,7 @@ public class CircularDependencyTest extends BuildViewTestCase {
       }
     }
     assertThat(foundEvent).isNotNull();
-    assertThat(foundEvent.getLocation().toString()).isEqualTo("/workspace/cycle/BUILD:3:1");
+    assertThat(foundEvent.getLocation().toString()).isEqualTo("/workspace/cycle/BUILD:3:14");
   }
 
   /**
@@ -265,15 +270,26 @@ public class CircularDependencyTest extends BuildViewTestCase {
                       new TransitionFactory<AttributeTransitionData>() {
                         @Override
                         public SplitTransition create(AttributeTransitionData data) {
-                          return (BuildOptions options) -> {
-                            String define = data.attributes().get("define", STRING);
-                            BuildOptions newOptions = options.clone();
-                            CoreOptions optionsFragment = newOptions.get(CoreOptions.class);
-                            optionsFragment.commandLineBuildVariables =
-                                optionsFragment.commandLineBuildVariables.stream()
-                                    .filter((pair) -> !pair.getKey().equals(define))
-                                    .collect(toImmutableList());
-                            return ImmutableMap.of("define_cleaner", newOptions);
+                          return new SplitTransition() {
+
+                            @Override
+                            public ImmutableSet<Class<? extends FragmentOptions>>
+                                requiresOptionFragments() {
+                              return ImmutableSet.of(CoreOptions.class);
+                            }
+
+                            @Override
+                            public Map<String, BuildOptions> split(
+                                BuildOptionsView options, EventHandler eventHandler) {
+                              String define = data.attributes().get("define", STRING);
+                              BuildOptionsView newOptions = options.clone();
+                              CoreOptions optionsFragment = newOptions.get(CoreOptions.class);
+                              optionsFragment.commandLineBuildVariables =
+                                  optionsFragment.commandLineBuildVariables.stream()
+                                      .filter((pair) -> !pair.getKey().equals(define))
+                                      .collect(toImmutableList());
+                              return ImmutableMap.of("define_cleaner", newOptions.underlying());
+                            }
                           };
                         }
 
@@ -284,7 +300,7 @@ public class CircularDependencyTest extends BuildViewTestCase {
                       }));
 
   @Override
-  protected ConfiguredRuleClassProvider getRuleClassProvider() {
+  protected ConfiguredRuleClassProvider createRuleClassProvider() {
     ConfiguredRuleClassProvider.Builder builder =
         new ConfiguredRuleClassProvider.Builder()
             .addRuleDefinition(NORMAL_DEPENDER)

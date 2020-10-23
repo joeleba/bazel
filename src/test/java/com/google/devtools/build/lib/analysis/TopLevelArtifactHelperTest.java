@@ -53,7 +53,7 @@ public class TopLevelArtifactHelperTest {
   public final void setRootDir() throws Exception {
     Scratch scratch = new Scratch();
     Path execRoot = scratch.getFileSystem().getPath("/");
-    root = ArtifactRoot.asDerivedRoot(execRoot, scratch.dir("/blaze-out"));
+    root = ArtifactRoot.asDerivedRoot(execRoot, "blaze-out");
     path = scratch.dir("/blaze-out/foo");
   }
 
@@ -65,7 +65,7 @@ public class TopLevelArtifactHelperTest {
       mapBuilder.put(
           groupArtifact.getFirst(), newArtifacts(checkNotNull(groupArtifact.getSecond())));
     }
-    ctx = new TopLevelArtifactContext(false, false, setBuilder.build());
+    ctx = new TopLevelArtifactContext(false, false, false, setBuilder.build());
     groupProvider = new OutputGroupInfo(mapBuilder.build());
   }
 

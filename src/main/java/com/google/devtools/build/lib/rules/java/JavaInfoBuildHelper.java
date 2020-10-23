@@ -31,24 +31,24 @@ import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.StrictDepsMode;
-import com.google.devtools.build.lib.analysis.skylark.SkylarkActionFactory;
-import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkActionFactory;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType;
 import com.google.devtools.build.lib.shell.ShellUtils;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
 
 /** Implements logic for creating JavaInfo from different set of input parameters. */
 final class JavaInfoBuildHelper {
@@ -130,6 +130,16 @@ final class JavaInfoBuildHelper {
         JavaSourceJarsProvider.class,
         createJavaSourceJarsProvider(sourceJars, concat(compileTimeDeps, runtimeDeps, exports)));
 
+    javaInfoBuilder.addProvider(
+        JavaGenJarsProvider.class,
+        JavaGenJarsProvider.create(
+            false,
+            null,
+            null,
+            JavaPluginInfoProvider.empty(),
+            JavaInfo.fetchProvidersFromList(
+                concat(compileTimeDeps, exports), JavaGenJarsProvider.class)));
+
     javaInfoBuilder.setRuntimeJars(ImmutableList.of(outputJar));
 
     return javaInfoBuilder.build();
@@ -143,24 +153,22 @@ final class JavaInfoBuildHelper {
    * @param outputJar name of output Jar artifact.
    * @param outputSourceJar name of output source Jar artifact, or {@code null}. If unset, defaults
    *     to base name of the output jar with the suffix {@code -src.jar}.
-   * @return generated artifact, or null if there's nothing to pack
+   * @return generated artifact (can also be empty)
    */
-  @Nullable
   Artifact packSourceFiles(
-      SkylarkActionFactory actions,
+      StarlarkActionFactory actions,
       Artifact outputJar,
       Artifact outputSourceJar,
       List<Artifact> sourceFiles,
       List<Artifact> sourceJars,
-      JavaToolchainProvider javaToolchain,
-      JavaRuntimeInfo hostJavabase)
+      JavaToolchainProvider javaToolchain)
       throws EvalException {
-    // No sources to pack, return None
-    if (sourceFiles.isEmpty() && sourceJars.isEmpty()) {
-      return null;
+    if (outputJar == null && outputSourceJar == null) {
+      throw Starlark.errorf(
+          "pack_sources requires at least one of the parameters output_jar or output_source_jar");
     }
     // If we only have one source jar, return it directly to avoid action creation
-    if (sourceFiles.isEmpty() && sourceJars.size() == 1) {
+    if (sourceFiles.isEmpty() && sourceJars.size() == 1 && outputSourceJar == null) {
       return sourceJars.get(0);
     }
     ActionRegistry actionRegistry = actions.asActionRegistry(actions);
@@ -174,8 +182,7 @@ final class JavaInfoBuildHelper {
         NestedSetBuilder.<Artifact>wrap(Order.STABLE_ORDER, sourceFiles),
         NestedSetBuilder.<Artifact>wrap(Order.STABLE_ORDER, sourceJars),
         outputSourceJar,
-        javaToolchain,
-        hostJavabase);
+        javaToolchain);
     return outputSourceJar;
   }
 
@@ -216,7 +223,7 @@ final class JavaInfoBuildHelper {
   }
 
   public JavaInfo createJavaCompileAction(
-      SkylarkRuleContext skylarkRuleContext,
+      StarlarkRuleContext starlarkRuleContext,
       List<Artifact> sourceJars,
       List<Artifact> sourceFiles,
       Artifact outputJar,
@@ -231,7 +238,6 @@ final class JavaInfoBuildHelper {
       List<Artifact> annotationProcessorAdditionalOutputs,
       String strictDepsMode,
       JavaToolchainProvider javaToolchain,
-      JavaRuntimeInfo hostJavabase,
       ImmutableList<Artifact> sourcepathEntries,
       List<Artifact> resources,
       Boolean neverlink,
@@ -239,18 +245,10 @@ final class JavaInfoBuildHelper {
       StarlarkThread thread)
       throws EvalException, InterruptedException {
 
-    if (sourceJars.isEmpty()
-        && sourceFiles.isEmpty()
-        && exports.isEmpty()
-        && exportedPlugins.isEmpty()) {
-      throw Starlark.errorf(
-          "source_jars, sources, exports and exported_plugins cannot be simultaneously empty");
-    }
-
     JavaToolchainProvider toolchainProvider = javaToolchain;
 
     JavaLibraryHelper helper =
-        new JavaLibraryHelper(skylarkRuleContext.getRuleContext())
+        new JavaLibraryHelper(starlarkRuleContext.getRuleContext())
             .setOutput(outputJar)
             .addSourceJars(sourceJars)
             .addSourceFiles(sourceFiles)
@@ -259,13 +257,13 @@ final class JavaInfoBuildHelper {
             .addAdditionalOutputs(annotationProcessorAdditionalOutputs)
             .setJavacOpts(
                 ImmutableList.<String>builder()
-                    .addAll(toolchainProvider.getJavacOptions(skylarkRuleContext.getRuleContext()))
+                    .addAll(toolchainProvider.getJavacOptions(starlarkRuleContext.getRuleContext()))
                     .addAll(
                         javaSemantics.getCompatibleJavacOptions(
-                            skylarkRuleContext.getRuleContext(), toolchainProvider))
+                            starlarkRuleContext.getRuleContext(), toolchainProvider))
                     .addAll(
                         JavaCommon.computePerPackageJavacOpts(
-                            skylarkRuleContext.getRuleContext(), toolchainProvider))
+                            starlarkRuleContext.getRuleContext(), toolchainProvider))
                     .addAll(tokenize(javacOpts))
                     .build());
 
@@ -284,7 +282,7 @@ final class JavaInfoBuildHelper {
     JavaRuleOutputJarsProvider.Builder outputJarsBuilder = JavaRuleOutputJarsProvider.builder();
 
     if (outputSourceJar == null) {
-      outputSourceJar = getDerivedSourceJar(skylarkRuleContext.getRuleContext(), outputJar);
+      outputSourceJar = getDerivedSourceJar(starlarkRuleContext.getRuleContext(), outputJar);
     }
 
     JavaInfo.Builder javaInfoBuilder = JavaInfo.Builder.create();
@@ -292,7 +290,6 @@ final class JavaInfoBuildHelper {
         helper.build(
             javaSemantics,
             toolchainProvider,
-            hostJavabase,
             outputJarsBuilder,
             /*createOutputSourceJar=*/ true,
             outputSourceJar,
@@ -306,7 +303,7 @@ final class JavaInfoBuildHelper {
     JavaCompilationArgsProvider javaCompilationArgsProvider =
         helper.buildCompilationArgsProvider(artifacts, true, neverlink);
     Runfiles runfiles =
-        new Runfiles.Builder(skylarkRuleContext.getWorkspaceName())
+        new Runfiles.Builder(starlarkRuleContext.getWorkspaceName())
             .addTransitiveArtifactsWrappedInStableOrder(
                 javaCompilationArgsProvider.getRuntimeJars())
             .build();
@@ -346,7 +343,7 @@ final class JavaInfoBuildHelper {
   }
 
   public Artifact buildIjar(
-      SkylarkActionFactory actions,
+      StarlarkActionFactory actions,
       Artifact inputJar,
       @Nullable Label targetLabel,
       JavaToolchainProvider javaToolchain)
@@ -373,7 +370,7 @@ final class JavaInfoBuildHelper {
   }
 
   public Artifact stampJar(
-      SkylarkActionFactory actions,
+      StarlarkActionFactory actions,
       Artifact inputJar,
       Label targetLabel,
       JavaToolchainProvider javaToolchain)

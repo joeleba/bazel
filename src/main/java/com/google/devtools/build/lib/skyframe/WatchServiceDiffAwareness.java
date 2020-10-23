@@ -47,6 +47,8 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
    */
   private final HashBiMap<WatchKey, Path> watchKeyToDirBiMap = HashBiMap.create();
 
+  private final boolean isWindows = OS.getCurrent() == OS.WINDOWS;
+
   /** Every directory is registered under this watch service. */
   private WatchService watchService;
 
@@ -85,9 +87,11 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
     //      contain files that are modified between init() and poll() below, because those are
     //      already taken into account for the current build, as we ended up with
     //      ModifiedFileSet.EVERYTHING_MODIFIED in the current build.
-    // Disable WatchFs on Windows, because it is not implemented correctly on Windows.
-    // TODO(pcloudy): Enable watchFs on Windows, https://github.com/bazelbuild/bazel/issues/1931
-    boolean watchFs = options.getOptions(Options.class).watchFS && OS.getCurrent() != OS.WINDOWS;
+    boolean watchFs =
+        options.getOptions(Options.class).watchFS
+            &&
+            // Guard WatchFs on Windows behind --experimental_windows_watchfs.
+            (!isWindows || options.getOptions(Options.class).windowsWatchFS);
     if (watchFs && watchService == null) {
       init();
     } else if (!watchFs && (watchService != null)) {
@@ -115,7 +119,7 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
     Set<Path> modifiedAbsolutePaths;
     if (isFirstCall()) {
       try {
-        registerSubDirectoriesAndReturnContents(watchRootPath);
+        registerSubDirectories(watchRootPath);
       } catch (IOException e) {
         close();
         throw new BrokenDiffAwarenessException(
@@ -251,6 +255,12 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
     return changedPaths;
   }
 
+  /** Traverses directory tree to register subdirectories. */
+  private void registerSubDirectories(Path rootDir) throws IOException {
+    // Note that this does not follow symlinks.
+    Files.walkFileTree(rootDir, new WatcherFileVisitor());
+  }
+
   /**
    * Traverses directory tree to register subdirectories. Returns all paths traversed (as absolute
    * paths).
@@ -271,6 +281,10 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
       this.visitedAbsolutePaths = visitedPaths;
     }
 
+    private WatcherFileVisitor() {
+      this.visitedAbsolutePaths = new HashSet<>();
+    }
+
     @Override
     public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) {
       Preconditions.checkState(path.isAbsolute(), path);
@@ -281,19 +295,25 @@ public final class WatchServiceDiffAwareness extends LocalDiffAwareness {
     @Override
     public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attrs)
         throws IOException {
+      // Do not traverse the bazel-* convenience symlinks. On windows these are created as
+      // junctions.
+      if (isWindows && attrs.isOther()) {
+        return FileVisitResult.SKIP_SUBTREE;
+      }
+
       // It's important that we register the directory before we visit its children. This way we
       // are guaranteed to see new files/directories either on this #getDiff or the next one.
       // Otherwise, e.g., an intra-build creation of a child directory will be forever missed if it
       // happens before the directory is listed as part of the visitation.
+      Preconditions.checkState(path.isAbsolute(), path);
       WatchKey key =
           path.register(
               watchService,
               StandardWatchEventKinds.ENTRY_CREATE,
               StandardWatchEventKinds.ENTRY_MODIFY,
               StandardWatchEventKinds.ENTRY_DELETE);
-      Preconditions.checkState(path.isAbsolute(), path);
-      visitedAbsolutePaths.add(path);
       watchKeyToDirBiMap.put(key, path);
+      visitedAbsolutePaths.add(path);
       return FileVisitResult.CONTINUE;
     }
   }

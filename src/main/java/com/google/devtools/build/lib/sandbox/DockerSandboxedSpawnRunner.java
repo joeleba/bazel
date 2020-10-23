@@ -34,8 +34,10 @@ import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.runtime.CommandCompleteEvent;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
-import com.google.devtools.build.lib.runtime.ProcessWrapperUtil;
+import com.google.devtools.build.lib.runtime.ProcessWrapper;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxInputs;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
+import com.google.devtools.build.lib.server.FailureDetails.Sandbox.Code;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.util.OS;
@@ -56,6 +58,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Spawn runner that uses Docker to execute a local subprocess. */
 final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
@@ -71,18 +74,18 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
    * Returns whether the darwin sandbox is supported on the local machine by running docker info.
    * This is expensive, and we have also reports of docker hanging for a long time!
    */
-  public static boolean isSupported(CommandEnvironment cmdEnv, Path dockerClient) {
+  public static boolean isSupported(CommandEnvironment cmdEnv, Path dockerClient)
+      throws InterruptedException {
     boolean verbose = cmdEnv.getOptions().getOptions(SandboxOptions.class).dockerVerbose;
 
-    if (!ProcessWrapperUtil.isSupported(cmdEnv)) {
+    if (ProcessWrapper.fromCommandEnvironment(cmdEnv) == null) {
       if (verbose) {
         cmdEnv
             .getReporter()
             .handle(
                 Event.error(
-                    "Docker sandboxing is disabled, because ProcessWrapperUtil.isSupported "
-                        + "returned false. This should never happen - is your Bazel binary "
-                        + "corrupted?"));
+                    "Docker sandboxing is disabled because ProcessWrapper is not supported. "
+                        + "This should never happen - is your Bazel binary corrupted?"));
       }
       return false;
     }
@@ -136,14 +139,14 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   private static final ConcurrentHashMap<String, String> imageMap = new ConcurrentHashMap<>();
 
+  private final SandboxHelpers helpers;
   private final Path execRoot;
   private final boolean allowNetwork;
   private final Path dockerClient;
-  private final Path processWrapper;
+  private final ProcessWrapper processWrapper;
   private final Path sandboxBase;
   private final String defaultImage;
   private final LocalEnvProvider localEnvProvider;
-  private final Duration timeoutKillDelay;
   private final String commandId;
   private final Reporter reporter;
   private final boolean useCustomizedImages;
@@ -156,31 +159,31 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   /**
    * Creates a sandboxed spawn runner that uses the {@code linux-sandbox} tool.
    *
+   * @param helpers common tools and state across all spawns during sandboxed execution
    * @param cmdEnv the command environment to use
    * @param dockerClient path to the `docker` executable
    * @param sandboxBase path to the sandbox base directory
    * @param defaultImage the Docker image to use if the platform doesn't specify one
-   * @param timeoutKillDelay an additional grace period before killing timing out commands
    * @param useCustomizedImages whether to use customized images for execution
    * @param treeDeleter scheduler for tree deletions
    */
   DockerSandboxedSpawnRunner(
+      SandboxHelpers helpers,
       CommandEnvironment cmdEnv,
       Path dockerClient,
       Path sandboxBase,
       String defaultImage,
-      Duration timeoutKillDelay,
       boolean useCustomizedImages,
       TreeDeleter treeDeleter) {
     super(cmdEnv);
+    this.helpers = helpers;
     this.execRoot = cmdEnv.getExecRoot();
-    this.allowNetwork = SandboxHelpers.shouldAllowNetwork(cmdEnv.getOptions());
+    this.allowNetwork = helpers.shouldAllowNetwork(cmdEnv.getOptions());
     this.dockerClient = dockerClient;
-    this.processWrapper = ProcessWrapperUtil.getProcessWrapper(cmdEnv);
+    this.processWrapper = ProcessWrapper.fromCommandEnvironment(cmdEnv);
     this.sandboxBase = sandboxBase;
     this.defaultImage = defaultImage;
     this.localEnvProvider = LocalEnvProvider.forCurrentOs(cmdEnv.getClientEnv());
-    this.timeoutKillDelay = timeoutKillDelay;
     this.commandId = cmdEnv.getCommandId().toString();
     this.reporter = cmdEnv.getReporter();
     this.useCustomizedImages = useCustomizedImages;
@@ -200,7 +203,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   @Override
   protected SandboxedSpawn prepareSpawn(Spawn spawn, SpawnExecutionContext context)
-      throws IOException, ExecException {
+      throws IOException, ExecException, InterruptedException {
     // Each invocation of "exec" gets its own sandbox base, execroot and temporary directory.
     Path sandboxPath =
         sandboxBase.getRelative(getName()).getRelative(Integer.toString(context.getId()));
@@ -216,7 +219,11 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     ImmutableMap<String, String> environment =
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
 
-    SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
+    SandboxInputs inputs =
+        helpers.processInputFiles(
+            context.getInputMapping(), spawn, context.getArtifactExpander(), execRoot);
+    SandboxOutputs outputs = helpers.getOutputs(spawn);
+
     Duration timeout = context.getTimeout();
 
     UUID uuid = UUID.randomUUID();
@@ -224,17 +231,16 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     String baseImageName = dockerContainerFromSpawn(spawn).orElse(this.defaultImage);
     if (baseImageName.isEmpty()) {
       throw new UserExecException(
-          String.format(
-              "Cannot execute %s mnemonic with Docker, because no "
-                  + "image could be found in the remote_execution_properties of the platform and "
-                  + "no default image was set via --experimental_docker_image",
-              spawn.getMnemonic()));
+          createFailureDetail(
+              String.format(
+                  "Cannot execute %s mnemonic with Docker, because no image could be found in the"
+                      + " remote_execution_properties of the platform and no default image was set"
+                      + " via --experimental_docker_image",
+                  spawn.getMnemonic()),
+              Code.NO_DOCKER_IMAGE));
     }
 
     String customizedImageName = getOrCreateCustomizedImage(baseImageName);
-    if (customizedImageName == null) {
-      throw new UserExecException("Could not prepare Docker image for execution");
-    }
 
     DockerCommandLineBuilder cmdLine = new DockerCommandLineBuilder();
     cmdLine
@@ -246,7 +252,6 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         .setAdditionalMounts(getSandboxOptions().sandboxAdditionalMounts)
         .setPrivileged(getSandboxOptions().dockerPrivileged)
         .setEnvironmentVariables(environment)
-        .setKillDelay(timeoutKillDelay)
         .setCreateNetworkNamespace(
             !(allowNetwork
                 || Spawns.requiresNetwork(spawn, getSandboxOptions().defaultSandboxAllowNetwork)))
@@ -276,11 +281,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         sandboxExecRoot,
         cmdLine.build(),
         cmdEnv.getClientEnv(),
-        SandboxHelpers.processInputFiles(
-            spawn,
-            context,
-            execRoot,
-            getSandboxOptions().symlinkedSandboxExpandsTreeArtifactsInRunfilesTree),
+        inputs,
         outputs,
         ImmutableSet.of(),
         treeDeleter,
@@ -288,7 +289,8 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
         () -> containersToCleanup.remove(uuid));
   }
 
-  private String getOrCreateCustomizedImage(String baseImage) {
+  private String getOrCreateCustomizedImage(String baseImage)
+      throws UserExecException, InterruptedException {
     // TODO(philwo) docker run implicitly does a docker pull if the image does not exist locally.
     // Pulling an image can take a long time and a user might not be aware of that. We could check
     // if the image exists locally (docker images -q name:tag) and if not, do a docker pull and
@@ -313,49 +315,67 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
       return baseImage;
     }
 
-    return imageMap.computeIfAbsent(
-        baseImage,
-        (image) -> {
-          reporter.handle(Event.info("Preparing Docker image " + image + " for use..."));
-          String workDir =
-              PathFragment.create("/execroot").getRelative(execRoot.getBaseName()).getPathString();
-          StringBuilder dockerfile = new StringBuilder();
-          dockerfile.append(String.format("FROM %s\n", image));
-          dockerfile.append(String.format("RUN [\"mkdir\", \"-p\", \"%s\"]\n", workDir));
-          // TODO(philwo) this will fail if a user / group with the given uid / gid already exists
-          // in the container. For now this seems reasonably unlikely, but we'll have to come up
-          // with a better way.
-          if (gid > 0) {
-            dockerfile.append(
-                String.format("RUN [\"groupadd\", \"-g\", \"%d\", \"bazelbuild\"]\n", gid));
-          }
-          if (uid > 0) {
-            dockerfile.append(
-                String.format(
-                    "RUN [\"useradd\", \"-m\", \"-g\", \"%d\", \"-d\", \"%s\", \"-N\", \"-u\", "
-                        + "\"%d\", \"bazelbuild\"]\n",
-                    gid, workDir, uid));
-          }
-          dockerfile.append(
-              String.format("RUN [\"chown\", \"-R\", \"%d:%d\", \"%s\"]\n", uid, gid, workDir));
-          dockerfile.append(String.format("USER %d:%d\n", uid, gid));
-          dockerfile.append(String.format("ENV HOME %s\n", workDir));
-          if (uid > 0) {
-            dockerfile.append(String.format("ENV USER bazelbuild\n"));
-          }
-          dockerfile.append(String.format("WORKDIR %s\n", workDir));
-          try {
-            return executeCommand(
-                ImmutableList.of(dockerClient.getPathString(), "build", "-q", "-"),
-                new ByteArrayInputStream(dockerfile.toString().getBytes(Charset.defaultCharset())));
-          } catch (UserExecException e) {
-            reporter.handle(Event.error(e.getMessage()));
-            return null;
-          }
-        });
+    AtomicReference<UserExecException> thrownUserExecException = new AtomicReference<>();
+    AtomicReference<InterruptedException> thrownInterruptedException = new AtomicReference<>();
+    String result =
+        imageMap.computeIfAbsent(
+            baseImage,
+            (image) -> {
+              reporter.handle(Event.info("Preparing Docker image " + image + " for use..."));
+              String workDir =
+                  PathFragment.create("/execroot")
+                      .getRelative(execRoot.getBaseName())
+                      .getPathString();
+              StringBuilder dockerfile = new StringBuilder();
+              dockerfile.append(String.format("FROM %s\n", image));
+              dockerfile.append(String.format("RUN [\"mkdir\", \"-p\", \"%s\"]\n", workDir));
+              // TODO(philwo) this will fail if a user / group with the given uid / gid already
+              // exists
+              // in the container. For now this seems reasonably unlikely, but we'll have to come up
+              // with a better way.
+              if (gid > 0) {
+                dockerfile.append(
+                    String.format("RUN [\"groupadd\", \"-g\", \"%d\", \"bazelbuild\"]\n", gid));
+              }
+              if (uid > 0) {
+                dockerfile.append(
+                    String.format(
+                        "RUN [\"useradd\", \"-m\", \"-g\", \"%d\", \"-d\", \"%s\", \"-N\", \"-u\", "
+                            + "\"%d\", \"bazelbuild\"]\n",
+                        gid, workDir, uid));
+              }
+              dockerfile.append(
+                  String.format("RUN [\"chown\", \"-R\", \"%d:%d\", \"%s\"]\n", uid, gid, workDir));
+              dockerfile.append(String.format("USER %d:%d\n", uid, gid));
+              dockerfile.append(String.format("ENV HOME %s\n", workDir));
+              if (uid > 0) {
+                dockerfile.append(String.format("ENV USER bazelbuild\n"));
+              }
+              dockerfile.append(String.format("WORKDIR %s\n", workDir));
+              try {
+                return executeCommand(
+                    ImmutableList.of(dockerClient.getPathString(), "build", "-q", "-"),
+                    new ByteArrayInputStream(
+                        dockerfile.toString().getBytes(Charset.defaultCharset())));
+              } catch (UserExecException e) {
+                thrownUserExecException.set(e);
+                return null;
+              } catch (InterruptedException e) {
+                thrownInterruptedException.set(e);
+                return null;
+              }
+            });
+    if (thrownUserExecException.get() != null) {
+      throw thrownUserExecException.get();
+    }
+    if (thrownInterruptedException.get() != null) {
+      throw thrownInterruptedException.get();
+    }
+    return result;
   }
 
-  private String executeCommand(List<String> cmdLine, InputStream stdIn) throws UserExecException {
+  private String executeCommand(List<String> cmdLine, InputStream stdIn)
+      throws UserExecException, InterruptedException {
     ByteArrayOutputStream stdOut = new ByteArrayOutputStream();
     ByteArrayOutputStream stdErr = new ByteArrayOutputStream();
 
@@ -366,8 +386,8 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
     try {
       cmd.executeAsync(stdIn, stdOut, stdErr, Command.KILL_SUBPROCESS_ON_INTERRUPT).get();
     } catch (CommandException e) {
-      throw new UserExecException(
-          "Running command " + cmd.toDebugString() + " failed: " + stdErr, e);
+      String message = String.format("Running command %s failed: %s", cmd.toDebugString(), stdErr);
+      throw new UserExecException(e, createFailureDetail(message, Code.DOCKER_COMMAND_FAILURE));
     }
     return stdOut.toString().trim();
   }
@@ -400,7 +420,7 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   // Remove all Docker containers that might be stuck in "Created" state and weren't automatically
   // cleaned up by Docker itself.
-  public void cleanup() {
+  public void cleanup() throws InterruptedException {
     if (containersToCleanup == null || containersToCleanup.isEmpty()) {
       return;
     }
@@ -428,8 +448,13 @@ final class DockerSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
   }
 
   @Subscribe
-  public void commandComplete(CommandCompleteEvent event) {
-    cleanup();
+  public void commandComplete(@SuppressWarnings("unused") CommandCompleteEvent event) {
+    try {
+      cleanup();
+    } catch (InterruptedException e) {
+      cmdEnv.getReporter().handle(Event.error("Interrupted while cleaning up docker sandbox"));
+      Thread.currentThread().interrupt();
+    }
   }
 
   @Override

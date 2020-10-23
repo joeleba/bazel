@@ -298,8 +298,8 @@ public class CppActionConfigs {
                         "    flag_group {",
                         "      expand_if_all_available: 'fdo_profile_path'",
                         "      flag: '-fprofile-use=%{fdo_profile_path}'",
-                        "      flag: '-Xclang-only=-Wno-profile-instr-unprofiled'",
-                        "      flag: '-Xclang-only=-Wno-profile-instr-out-of-date'",
+                        "      flag: '-Wno-profile-instr-unprofiled'",
+                        "      flag: '-Wno-profile-instr-out-of-date'",
                         "      flag: '-fprofile-correction'",
                         "    }",
                         "  }")));
@@ -341,8 +341,8 @@ public class CppActionConfigs {
                         "    flag_group {",
                         "      expand_if_all_available: 'fdo_profile_path'",
                         "      flag: '-fprofile-use=%{fdo_profile_path}'",
-                        "      flag: '-Xclang-only=-Wno-profile-instr-unprofiled'",
-                        "      flag: '-Xclang-only=-Wno-profile-instr-out-of-date'",
+                        "      flag: '-Wno-profile-instr-unprofiled'",
+                        "      flag: '-Wno-profile-instr-out-of-date'",
                         "      flag: '-fprofile-correction'",
                         "    }",
                         "  }")));
@@ -360,9 +360,8 @@ public class CppActionConfigs {
                         "    action: 'lto-backend'",
                         "    flag_group {",
                         "      expand_if_all_available: 'fdo_prefetch_hints_path'",
-                        "      flag: '-Xclang-only=-mllvm'",
-                        "      flag: '-Xclang-only=-prefetch-hints-file="
-                            + "%{fdo_prefetch_hints_path}'",
+                        "      flag: '-mllvm'",
+                        "      flag: '-prefetch-hints-file=" + "%{fdo_prefetch_hints_path}'",
                         "    }",
                         "  }")));
       }
@@ -380,6 +379,29 @@ public class CppActionConfigs {
                         "      expand_if_all_available: 'fdo_profile_path'",
                         "      flag: '-fauto-profile=%{fdo_profile_path}'",
                         "      flag: '-fprofile-correction'",
+                        "    }",
+                        "  }")));
+      }
+      if (!existingFeatureNames.contains(CppRuleClasses.PROPELLER_OPTIMIZE)) {
+        featureBuilder.add(
+            getFeature(
+                Joiner.on("\n")
+                    .join(
+                        "  name: 'propeller_optimize'",
+                        "  flag_set {",
+                        "    action: 'c-compile'",
+                        "    action: 'c++-compile'",
+                        "    action: 'lto-backend'",
+                        "    flag_group {",
+                        "      expand_if_all_available: 'propeller_optimize_cc_path'",
+                        "      flag: '-fbasic-block-sections=list=%{propeller_optimize_cc_path}'",
+                        "    }",
+                        "  }",
+                        "  flag_set {",
+                        "    action: 'c++-link-executable'",
+                        "    flag_group {",
+                        "      expand_if_true: 'propeller_optimize_ld_path'",
+                        "      flag: '-Wl,--symbol-ordering-file=%{propeller_optimize_ld_path}'",
                         "    }",
                         "  }")));
       }

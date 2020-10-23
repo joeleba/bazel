@@ -92,12 +92,13 @@ public class GlobCache {
    * @param globExecutor thread pool for glob evaluation.
    * @param maxDirectoriesToEagerlyVisit the number of directories to eagerly traverse on the first
    *     glob for a given package, in order to warm the filesystem. -1 means do no eager traversal.
-   *     See {@code PackageCacheOptions#maxDirectoriesToEagerlyVisitInGlobbing}.
+   *     See {@link
+   *     com.google.devtools.build.lib.pkgcache.PackageOptions#maxDirectoriesToEagerlyVisitInGlobbing}.
    */
   public GlobCache(
       final Path packageDirectory,
       final PackageIdentifier packageId,
-      final ImmutableSet<PathFragment> blacklistedGlobPrefixes,
+      final ImmutableSet<PathFragment> ignoredGlobPrefixes,
       final CachingPackageLocator locator,
       AtomicReference<? extends UnixGlob.FilesystemCalls> syscalls,
       Executor globExecutor,
@@ -118,8 +119,8 @@ public class GlobCache {
           PathFragment subPackagePath =
               packageId.getPackageFragment().getRelative(directory.relativeTo(packageDirectory));
 
-          for (PathFragment blacklistedPrefix : blacklistedGlobPrefixes) {
-            if (subPackagePath.startsWith(blacklistedPrefix)) {
+          for (PathFragment ignoredPrefix : ignoredGlobPrefixes) {
+            if (subPackagePath.startsWith(ignoredPrefix)) {
               return false;
             }
           }
@@ -253,14 +254,15 @@ public class GlobCache {
     }
 
     HashSet<String> results = new HashSet<>();
-    Preconditions.checkState(!results.contains(null), "glob returned null");
     for (String pattern : includes) {
       List<String> items = getGlobUnsorted(pattern, excludeDirs);
       if (!allowEmpty && items.isEmpty()) {
         throw new BadGlobException(
             "glob pattern '"
                 + pattern
-                + "' didn't match anything, but allow_empty is set to False.");
+                + "' didn't match anything, but allow_empty is set to False "
+                + "(the default value of allow_empty can be set with "
+                + "--incompatible_disallow_empty_glob).");
       }
       results.addAll(items);
     }
@@ -271,7 +273,9 @@ public class GlobCache {
     }
     if (!allowEmpty && results.isEmpty()) {
       throw new BadGlobException(
-          "all files in the glob have been excluded, but allow_empty is set to False.");
+          "all files in the glob have been excluded, but allow_empty is set to False "
+              + "(the default value of allow_empty can be set with "
+              + "--incompatible_disallow_empty_glob).");
     }
     return new ArrayList<>(results);
   }

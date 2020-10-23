@@ -21,10 +21,13 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
+import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStateType;
 import com.google.devtools.build.lib.concurrent.ExecutorUtil;
@@ -35,10 +38,12 @@ import com.google.devtools.build.lib.profiler.AutoProfiler.ElapsedTimeReceiver;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker.DirtyResult;
+import com.google.devtools.build.lib.skyframe.TreeArtifactValue.ArchivedRepresentation;
 import com.google.devtools.build.lib.util.LoggingUtil;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.BatchStat;
+import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatusWithDigest;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Path;
@@ -64,10 +69,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 import javax.annotation.Nullable;
 
 /**
@@ -76,24 +79,25 @@ import javax.annotation.Nullable;
  */
 public class FilesystemValueChecker {
 
-  private static final int DIRTINESS_CHECK_THREADS = 200;
-  private static final Logger logger = Logger.getLogger(FilesystemValueChecker.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   private static final Predicate<SkyKey> ACTION_FILTER =
       SkyFunctionName.functionIs(SkyFunctions.ACTION_EXECUTION);
 
   @Nullable private final TimestampGranularityMonitor tsgm;
-  @Nullable
-  private final Range<Long> lastExecutionTimeRange;
+  @Nullable private final Range<Long> lastExecutionTimeRange;
   private AtomicInteger modifiedOutputFilesCounter = new AtomicInteger(0);
   private AtomicInteger modifiedOutputFilesIntraBuildCounter = new AtomicInteger(0);
+  private final int numThreads;
 
-  public FilesystemValueChecker(@Nullable TimestampGranularityMonitor tsgm,
-      @Nullable Range<Long> lastExecutionTimeRange) {
+  public FilesystemValueChecker(
+      @Nullable TimestampGranularityMonitor tsgm,
+      @Nullable Range<Long> lastExecutionTimeRange,
+      int numThreads) {
     this.tsgm = tsgm;
     this.lastExecutionTimeRange = lastExecutionTimeRange;
+    this.numThreads = numThreads;
   }
-
   /**
    * Returns a {@link Differencer.DiffWithDelta} containing keys from the give map that are dirty
    * according to the passed-in {@code dirtinessChecker}.
@@ -113,7 +117,7 @@ public class FilesystemValueChecker {
    */
   public ImmutableBatchDirtyResult getNewAndOldValues(
       Map<SkyKey, SkyValue> valuesMap,
-      Iterable<SkyKey> keys,
+      Collection<SkyKey> keys,
       SkyValueDirtinessChecker dirtinessChecker)
       throws InterruptedException {
     return getDirtyValues(new MapBackedValueFetcher(valuesMap), keys,
@@ -124,9 +128,11 @@ public class FilesystemValueChecker {
    * Returns a {@link Differencer.DiffWithDelta} containing keys that are dirty according to the
    * passed-in {@code dirtinessChecker}.
    */
-  public Differencer.DiffWithDelta getNewAndOldValues(WalkableGraph walkableGraph,
-      Iterable<SkyKey> keys, SkyValueDirtinessChecker dirtinessChecker)
-          throws InterruptedException {
+  public Differencer.DiffWithDelta getNewAndOldValues(
+      WalkableGraph walkableGraph,
+      Collection<SkyKey> keys,
+      SkyValueDirtinessChecker dirtinessChecker)
+      throws InterruptedException {
     return getDirtyValues(new WalkableGraphBackedValueFetcher(walkableGraph), keys,
         dirtinessChecker, /*checkMissingValues=*/true);
   }
@@ -165,17 +171,20 @@ public class FilesystemValueChecker {
   }
 
   /**
-   * Return a collection of action values which have output files that are not in-sync with
-   * the on-disk file value (were modified externally).
+   * Return a collection of action values which have output files that are not in-sync with the
+   * on-disk file value (were modified externally).
    */
-  Collection<SkyKey> getDirtyActionValues(Map<SkyKey, SkyValue> valuesMap,
-      @Nullable final BatchStat batchStatter, ModifiedFileSet modifiedOutputFiles)
-          throws InterruptedException {
+  Collection<SkyKey> getDirtyActionValues(
+      Map<SkyKey, SkyValue> valuesMap,
+      @Nullable final BatchStat batchStatter,
+      ModifiedFileSet modifiedOutputFiles,
+      boolean trustRemoteArtifacts)
+      throws InterruptedException {
     if (modifiedOutputFiles == ModifiedFileSet.NOTHING_MODIFIED) {
-      logger.info("Not checking for dirty actions since nothing was modified");
+      logger.atInfo().log("Not checking for dirty actions since nothing was modified");
       return ImmutableList.of();
     }
-    logger.info("Accumulating dirty actions");
+    logger.atInfo().log("Accumulating dirty actions");
     final int numOutputJobs = Runtime.getRuntime().availableProcessors() * 4;
     final Set<SkyKey> actionSkyKeys = new HashSet<>();
     try (SilentCloseable c = Profiler.instance().profile("getDirtyActionValues.filter_actions")) {
@@ -191,7 +200,7 @@ public class FilesystemValueChecker {
     for (SkyKey key : actionSkyKeys) {
       outputShards.add(Pair.of(key, (ActionExecutionValue) valuesMap.get(key)));
     }
-    logger.info("Sharded action values for batching");
+    logger.atInfo().log("Sharded action values for batching");
 
     ExecutorService executor = Executors.newFixedThreadPool(
         numOutputJobs,
@@ -228,30 +237,38 @@ public class FilesystemValueChecker {
         Runnable job =
             (batchStatter == null)
                 ? outputStatJob(
-                    dirtyKeys, shard, knownModifiedOutputFiles, sortedKnownModifiedOutputFiles)
+                    dirtyKeys,
+                    shard,
+                    knownModifiedOutputFiles,
+                    sortedKnownModifiedOutputFiles,
+                    trustRemoteArtifacts)
                 : batchStatJob(
                     dirtyKeys,
                     shard,
                     batchStatter,
                     knownModifiedOutputFiles,
-                    sortedKnownModifiedOutputFiles);
+                    sortedKnownModifiedOutputFiles,
+                    trustRemoteArtifacts);
         Future<?> unused = executor.submit(wrapper.wrap(job));
       }
 
       interrupted = ExecutorUtil.interruptibleShutdown(executor);
     }
     Throwables.propagateIfPossible(wrapper.getFirstThrownError());
-    logger.info("Completed output file stat checks");
+    logger.atInfo().log("Completed output file stat checks");
     if (interrupted) {
       throw new InterruptedException();
     }
     return dirtyKeys;
   }
 
-  private Runnable batchStatJob(final Collection<SkyKey> dirtyKeys,
-          final List<Pair<SkyKey, ActionExecutionValue>> shard,
-          final BatchStat batchStatter, final ImmutableSet<PathFragment> knownModifiedOutputFiles,
-          final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
+  private Runnable batchStatJob(
+      final Collection<SkyKey> dirtyKeys,
+      final List<Pair<SkyKey, ActionExecutionValue>> shard,
+      final BatchStat batchStatter,
+      final ImmutableSet<PathFragment> knownModifiedOutputFiles,
+      final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles,
+      boolean trustRemoteArtifacts) {
     return new Runnable() {
       @Override
       public void run() {
@@ -270,9 +287,25 @@ public class FilesystemValueChecker {
               }
             }
 
-            for (Artifact artifact : actionValue.getAllTreeArtifactValues().keySet()) {
-              if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), artifact)) {
-                treeArtifactsToKeyAndValue.put(artifact, keyAndValue);
+            for (Map.Entry<Artifact, TreeArtifactValue> entry :
+                actionValue.getAllTreeArtifactValues().entrySet()) {
+              Artifact treeArtifact = entry.getKey();
+              TreeArtifactValue tree = entry.getValue();
+              for (TreeFileArtifact child : tree.getChildren()) {
+                if (shouldCheckFile(knownModifiedOutputFiles, child)) {
+                  fileToKeyAndValue.put(child, keyAndValue);
+                }
+              }
+              tree.getArchivedRepresentation()
+                  .map(ArchivedRepresentation::archivedTreeFileArtifact)
+                  .filter(
+                      archivedTreeArtifact ->
+                          shouldCheckFile(knownModifiedOutputFiles, archivedTreeArtifact))
+                  .ifPresent(
+                      archivedTreeArtifact ->
+                          fileToKeyAndValue.put(archivedTreeArtifact, keyAndValue));
+              if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), treeArtifact)) {
+                treeArtifactsToKeyAndValue.put(treeArtifact, keyAndValue);
               }
             }
           }
@@ -289,8 +322,13 @@ public class FilesystemValueChecker {
         } catch (IOException e) {
           // Batch stat did not work. Log an exception and fall back on system calls.
           LoggingUtil.logToRemote(Level.WARNING, "Unable to process batch stat", e);
-          logger.log(Level.WARNING, "Unable to process batch stat", e);
-          outputStatJob(dirtyKeys, shard, knownModifiedOutputFiles, sortedKnownModifiedOutputFiles)
+          logger.atWarning().withCause(e).log("Unable to process batch stat");
+          outputStatJob(
+                  dirtyKeys,
+                  shard,
+                  knownModifiedOutputFiles,
+                  sortedKnownModifiedOutputFiles,
+                  trustRemoteArtifacts)
               .run();
           return;
         } catch (InterruptedException e) {
@@ -309,7 +347,7 @@ public class FilesystemValueChecker {
           Pair<SkyKey, ActionExecutionValue> keyAndValue = fileToKeyAndValue.get(artifact);
           ActionExecutionValue actionValue = keyAndValue.getSecond();
           SkyKey key = keyAndValue.getFirst();
-          FileArtifactValue lastKnownData = actionValue.getAllFileValues().get(artifact);
+          FileArtifactValue lastKnownData = actionValue.getExistingFileArtifactValue(artifact);
           try {
             FileArtifactValue newData =
                 ActionMetadataHandler.fileArtifactValueFromArtifact(artifact, stat, tsgm);
@@ -355,10 +393,12 @@ public class FilesystemValueChecker {
     }
   }
 
-  private Runnable outputStatJob(final Collection<SkyKey> dirtyKeys,
+  private Runnable outputStatJob(
+      final Collection<SkyKey> dirtyKeys,
       final List<Pair<SkyKey, ActionExecutionValue>> shard,
       final ImmutableSet<PathFragment> knownModifiedOutputFiles,
-      final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
+      final Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles,
+      boolean trustRemoteArtifacts) {
     return new Runnable() {
       @Override
       public void run() {
@@ -366,7 +406,10 @@ public class FilesystemValueChecker {
           ActionExecutionValue value = keyAndValue.getSecond();
           if (value == null
               || actionValueIsDirtyWithDirectSystemCalls(
-                  value, knownModifiedOutputFiles, sortedKnownModifiedOutputFiles)) {
+                  value,
+                  knownModifiedOutputFiles,
+                  sortedKnownModifiedOutputFiles,
+                  trustRemoteArtifacts)) {
             dirtyKeys.add(keyAndValue.getFirst());
           }
         }
@@ -387,61 +430,105 @@ public class FilesystemValueChecker {
   }
 
   private boolean treeArtifactIsDirty(Artifact artifact, TreeArtifactValue value) {
-    if (artifact.getPath().isSymbolicLink()) {
-      // TreeArtifacts may not be symbolic links.
-      return true;
+    Path path = artifact.getPath();
+    if (path.isSymbolicLink()) {
+      return true; // TreeArtifacts may not be symbolic links.
     }
 
-    // There doesn't appear to be any facility to batch list directories... we must
-    // do things the 'slow' way.
+    // This could be improved by short-circuiting as soon as we see a child that is not present in
+    // the TreeArtifactValue, but it doesn't seem to be a major source of overhead.
+    Set<PathFragment> currentChildren = new HashSet<>();
     try {
-      Set<PathFragment> currentDirectoryValue =
-          TreeArtifactValue.explodeDirectory(artifact.getPath());
-      return !(currentDirectoryValue.isEmpty() && value.isRemote())
-          && !currentDirectoryValue.equals(value.getChildPaths());
+      TreeArtifactValue.visitTree(
+          path,
+          (child, type) -> {
+            if (type != Dirent.Type.DIRECTORY) {
+              currentChildren.add(child);
+            }
+          });
     } catch (IOException e) {
+      return true;
+    }
+    return !(currentChildren.isEmpty() && value.isEntirelyRemote())
+        && !currentChildren.equals(value.getChildPaths());
+  }
+
+  private boolean artifactIsDirtyWithDirectSystemCalls(
+      ImmutableSet<PathFragment> knownModifiedOutputFiles,
+      boolean trustRemoteArtifacts,
+      Map.Entry<? extends Artifact, FileArtifactValue> entry) {
+    Artifact file = entry.getKey();
+    FileArtifactValue lastKnownData = entry.getValue();
+    if (file.isMiddlemanArtifact() || !shouldCheckFile(knownModifiedOutputFiles, file)) {
+      return false;
+    }
+    try {
+      FileArtifactValue fileMetadata =
+          ActionMetadataHandler.fileArtifactValueFromArtifact(file, null, tsgm);
+      boolean trustRemoteValue =
+          fileMetadata.getType() == FileStateType.NONEXISTENT
+              && lastKnownData.isRemote()
+              && trustRemoteArtifacts;
+      if (!trustRemoteValue && fileMetadata.couldBeModifiedSince(lastKnownData)) {
+        updateIntraBuildModifiedCounter(
+            fileMetadata.getType() != FileStateType.NONEXISTENT
+                ? file.getPath().getLastModifiedTime(Symlinks.FOLLOW)
+                : -1);
+        modifiedOutputFilesCounter.getAndIncrement();
+        return true;
+      }
+      return false;
+    } catch (IOException e) {
+      // This is an unexpected failure getting a digest or symlink target.
+      modifiedOutputFilesCounter.getAndIncrement();
       return true;
     }
   }
 
-  private boolean actionValueIsDirtyWithDirectSystemCalls(ActionExecutionValue actionValue,
+  private boolean actionValueIsDirtyWithDirectSystemCalls(
+      ActionExecutionValue actionValue,
       ImmutableSet<PathFragment> knownModifiedOutputFiles,
-      Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles) {
+      Supplier<NavigableSet<PathFragment>> sortedKnownModifiedOutputFiles,
+      boolean trustRemoteArtifacts) {
     boolean isDirty = false;
     for (Map.Entry<Artifact, FileArtifactValue> entry : actionValue.getAllFileValues().entrySet()) {
-      Artifact file = entry.getKey();
-      FileArtifactValue lastKnownData = entry.getValue();
-      if (!file.isMiddlemanArtifact() && shouldCheckFile(knownModifiedOutputFiles, file)) {
-        try {
-          FileArtifactValue fileMetadata =
-              ActionMetadataHandler.fileArtifactValueFromArtifact(file, null, tsgm);
-          FileArtifactValue fileValue = actionValue.getArtifactValue(file);
-          boolean lastSeenRemotely = (fileValue != null) && fileValue.isRemote();
-          boolean trustRemoteValue =
-              fileMetadata.getType() == FileStateType.NONEXISTENT && lastSeenRemotely;
-          if (!trustRemoteValue && fileMetadata.couldBeModifiedSince(lastKnownData)) {
-            updateIntraBuildModifiedCounter(
-                fileMetadata.getType() != FileStateType.NONEXISTENT
-                    ? file.getPath().getLastModifiedTime(Symlinks.FOLLOW)
-                    : -1);
-            modifiedOutputFilesCounter.getAndIncrement();
-            isDirty = true;
-          }
-        } catch (IOException e) {
-          // This is an unexpected failure getting a digest or symlink target.
-          modifiedOutputFilesCounter.getAndIncrement();
-          isDirty = true;
-        }
+      if (artifactIsDirtyWithDirectSystemCalls(
+          knownModifiedOutputFiles, trustRemoteArtifacts, entry)) {
+        isDirty = true;
       }
     }
 
     for (Map.Entry<Artifact, TreeArtifactValue> entry :
         actionValue.getAllTreeArtifactValues().entrySet()) {
-      Artifact artifact = entry.getKey();
+      TreeArtifactValue tree = entry.getValue();
 
-      if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), artifact)
-          && treeArtifactIsDirty(artifact, entry.getValue())) {
-        Path path = artifact.getPath();
+      if (!tree.isEntirelyRemote()) {
+        for (Map.Entry<TreeFileArtifact, FileArtifactValue> childEntry :
+            tree.getChildValues().entrySet()) {
+          if (artifactIsDirtyWithDirectSystemCalls(
+              knownModifiedOutputFiles, trustRemoteArtifacts, childEntry)) {
+            isDirty = true;
+          }
+        }
+        isDirty =
+            isDirty
+                || tree.getArchivedRepresentation()
+                    .map(
+                        archivedRepresentation ->
+                            artifactIsDirtyWithDirectSystemCalls(
+                                knownModifiedOutputFiles,
+                                trustRemoteArtifacts,
+                                Maps.immutableEntry(
+                                    archivedRepresentation.archivedTreeFileArtifact(),
+                                    archivedRepresentation.archivedFileValue())))
+                    .orElse(false);
+      }
+
+      Artifact treeArtifact = entry.getKey();
+
+      if (shouldCheckTreeArtifact(sortedKnownModifiedOutputFiles.get(), treeArtifact)
+          && treeArtifactIsDirty(treeArtifact, entry.getValue())) {
+        Path path = treeArtifact.getPath();
         // Count the changed directory as one "file".
         try {
           updateIntraBuildModifiedCounter(path.exists() ? path.getLastModifiedTime() : -1);
@@ -484,34 +571,29 @@ public class FilesystemValueChecker {
 
   private ImmutableBatchDirtyResult getDirtyValues(
       ValueFetcher fetcher,
-      Iterable<SkyKey> keys,
+      Collection<SkyKey> keys,
       final SkyValueDirtinessChecker checker,
       final boolean checkMissingValues)
       throws InterruptedException {
     ExecutorService executor =
         Executors.newFixedThreadPool(
-            DIRTINESS_CHECK_THREADS,
+            numThreads,
             new ThreadFactoryBuilder().setNameFormat("FileSystem Value Invalidator %d").build());
 
     ThrowableRecordingRunnableWrapper wrapper =
         new ThrowableRecordingRunnableWrapper("FilesystemValueChecker#getDirtyValues");
-    final AtomicInteger numKeysScanned = new AtomicInteger(0);
     final AtomicInteger numKeysChecked = new AtomicInteger(0);
     MutableBatchDirtyResult batchResult = new MutableBatchDirtyResult(numKeysChecked);
     ElapsedTimeReceiver elapsedTimeReceiver =
         elapsedTimeNanos -> {
           if (elapsedTimeNanos > 0) {
-            logger.info(
-                String.format(
-                    "Spent %d ms checking %d filesystem nodes (%d scanned)",
-                    TimeUnit.MILLISECONDS.convert(elapsedTimeNanos, TimeUnit.NANOSECONDS),
-                    numKeysChecked.get(),
-                    numKeysScanned.get()));
+            logger.atInfo().log(
+                "Spent %d nanoseconds checking %d filesystem nodes (%d scanned)",
+                elapsedTimeNanos, numKeysChecked.get(), keys.size());
           }
         };
     try (AutoProfiler prof = AutoProfiler.create(elapsedTimeReceiver)) {
       for (final SkyKey key : keys) {
-        numKeysScanned.incrementAndGet();
         if (!checker.applies(key)) {
           continue;
         }

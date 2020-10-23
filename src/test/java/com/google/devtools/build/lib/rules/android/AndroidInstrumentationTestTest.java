@@ -92,7 +92,7 @@ public class AndroidInstrumentationTestTest extends AndroidBuildViewTestCase {
         "  ],",
         ")");
     setupTargetDevice();
-    setSkylarkSemanticsOptions("--experimental_google_legacy_api");
+    setBuildLanguageOptions("--experimental_google_legacy_api");
   }
 
   // TODO(ajmichael): Share this with AndroidDeviceTest.java
@@ -233,15 +233,15 @@ public class AndroidInstrumentationTestTest extends AndroidBuildViewTestCase {
   }
 
   @Test
-  public void testAndroidInstrumentationTestWithSkylarkDevice() throws Exception {
+  public void testAndroidInstrumentationTestWithStarlarkDevice() throws Exception {
     scratch.file(
-        "javatests/com/app/skylarkdevice/local_adb_device.bzl",
+        "javatests/com/app/starlarkdevice/local_adb_device.bzl",
         "def _impl(ctx):",
         "  ctx.actions.write(output=ctx.outputs.executable, content='', is_executable=True)",
         "  return [android_common.create_device_broker_info('LOCAL_ADB_SERVER')]",
         "local_adb_device = rule(implementation=_impl, executable=True)");
     scratch.file(
-        "javatests/com/app/skylarkdevice/BUILD",
+        "javatests/com/app/starlarkdevice/BUILD",
         "load(':local_adb_device.bzl', 'local_adb_device')",
         "local_adb_device(name = 'local_adb_device')",
         "android_instrumentation_test(",
@@ -250,7 +250,7 @@ public class AndroidInstrumentationTestTest extends AndroidBuildViewTestCase {
         "  target_device = ':local_adb_device',",
         ")");
     String testExecutableScript =
-        getTestStubContents(getConfiguredTarget("//javatests/com/app/skylarkdevice:ait"));
+        getTestStubContents(getConfiguredTarget("//javatests/com/app/starlarkdevice:ait"));
     assertThat(testExecutableScript).contains("device_broker_type=\"LOCAL_ADB_SERVER\"");
   }
 

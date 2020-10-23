@@ -16,8 +16,8 @@ package com.google.devtools.build.lib.rules.android;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.packages.RuleErrorConsumer;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.android.databinding.DataBinding;
 import com.google.devtools.build.lib.rules.android.databinding.DataBindingContext;
@@ -164,7 +164,8 @@ public class ProcessedAndroidData {
       AndroidAssets assets,
       ResourceDependencies resourceDeps,
       AssetDependencies assetDeps,
-      List<String> noCompressExtensions)
+      List<String> noCompressExtensions,
+      ResourceFilterFactory resourceFilterFactory)
       throws InterruptedException {
 
     return builderForNonIncrementalTopLevelTarget(dataContext, manifest, manifestValues)
@@ -176,6 +177,7 @@ public class ProcessedAndroidData {
         .withResourceDependencies(resourceDeps)
         .withAssetDependencies(assetDeps)
         .setUncompressedExtensions(noCompressExtensions)
+        .setResourceFilterFactory(resourceFilterFactory)
         .build(dataContext, resources, assets, manifest, dataBindingContext);
   }
 

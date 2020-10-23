@@ -20,9 +20,9 @@ import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTr
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.packages.AttributeTransitionData;
-import com.google.devtools.build.lib.skylarkbuildapi.python.PyStarlarkTransitionsApi;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
+import com.google.devtools.build.lib.starlarkbuildapi.python.PyStarlarkTransitionsApi;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.StarlarkValue;
 
 /**
  * Exposes a native transition to Starlark for changing the Python version.
@@ -40,7 +40,7 @@ import com.google.devtools.build.lib.syntax.StarlarkValue;
  */
 public final class PyStarlarkTransitions implements PyStarlarkTransitionsApi {
 
-  /** Singleton instance of {@link PySkylarkTransitions}. */
+  /** Singleton instance of {@link PyStarlarkTransitions}. */
   public static final PyStarlarkTransitions INSTANCE = new PyStarlarkTransitions();
 
   @Override

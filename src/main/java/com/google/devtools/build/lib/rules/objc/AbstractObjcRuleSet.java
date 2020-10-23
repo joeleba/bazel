@@ -25,7 +25,7 @@ import com.google.devtools.build.lib.rules.apple.XcodeConfigRule;
 import com.google.devtools.build.lib.rules.apple.XcodeVersionRule;
 import com.google.devtools.build.lib.rules.apple.cpp.AppleCcToolchainRule;
 import com.google.devtools.build.lib.rules.apple.swift.SwiftConfiguration;
-import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleBootstrap;
+import com.google.devtools.build.lib.starlarkbuildapi.apple.AppleBootstrap;
 
 /** Rules for Objective-C support. */
 public abstract class AbstractObjcRuleSet implements RuleSet {
@@ -67,13 +67,12 @@ public abstract class AbstractObjcRuleSet implements RuleSet {
     builder.addRuleDefinition(new ObjcRuleClasses.SdkFrameworksDependerRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CompileDependencyRule());
     builder.addRuleDefinition(new ObjcRuleClasses.XcrunRule());
-    builder.addRuleDefinition(new ObjcRuleClasses.LibtoolRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CrosstoolRule());
     builder.addRuleDefinition(new XcodeConfigRule());
     builder.addRuleDefinition(new XcodeConfigAliasRule());
     builder.addRuleDefinition(new AvailableXcodesRule());
     builder.addRuleDefinition(new XcodeVersionRule());
 
-    builder.addSkylarkBootstrap(new AppleBootstrap(new AppleSkylarkCommon(objcProtoAspect)));
+    builder.addStarlarkBootstrap(new AppleBootstrap(new AppleStarlarkCommon(objcProtoAspect)));
   }
 }

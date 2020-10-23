@@ -14,7 +14,7 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.mock;
 
 import com.google.common.collect.ImmutableList;
@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
@@ -37,11 +38,12 @@ import org.junit.runners.JUnit4;
 /** Test. */
 @RunWith(JUnit4.class)
 public class HeaderDiscoveryTest {
+  private static final String DERIVED_SEGMENT = "derived";
 
-  private final FileSystem fs = new InMemoryFileSystem();
+  private final FileSystem fs = new InMemoryFileSystem(DigestHashFunction.SHA256);
   private final Path execRoot = fs.getPath("/execroot");
-  private final Path derivedRoot = execRoot.getRelative("derived");
-  private final ArtifactRoot artifactRoot = ArtifactRoot.asDerivedRoot(execRoot, derivedRoot);
+  private final Path derivedRoot = execRoot.getChild(DERIVED_SEGMENT);
+  private final ArtifactRoot artifactRoot = ArtifactRoot.asDerivedRoot(execRoot, DERIVED_SEGMENT);
 
   @Test
   public void errorsWhenMissingHeaders() {

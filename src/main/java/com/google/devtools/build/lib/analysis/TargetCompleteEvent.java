@@ -30,12 +30,14 @@ import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTa
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent.LocalFile.LocalFileType;
 import com.google.devtools.build.lib.buildeventstream.BuildEventContext;
-import com.google.devtools.build.lib.buildeventstream.BuildEventId;
+import com.google.devtools.build.lib.buildeventstream.BuildEventIdUtil;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.File;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.OutputGroup;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.TargetComplete;
@@ -46,19 +48,22 @@ import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.NestedSetView;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.TestTimeout;
 import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
+import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
+import com.google.devtools.build.lib.util.DetailedExitCode;
+import com.google.devtools.build.lib.util.DetailedExitCode.DetailedExitCodeComparator;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyValue;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.function.Function;
 import javax.annotation.Nullable;
@@ -117,6 +122,7 @@ public final class TargetCompleteEvent
   private final BuildEventId configEventId;
   private final Iterable<String> tags;
   private final ExecutableTargetData executableTargetData;
+  @Nullable private final DetailedExitCode detailedExitCode;
 
   private TargetCompleteEvent(
       ConfiguredTargetAndData targetAndData,
@@ -125,23 +131,25 @@ public final class TargetCompleteEvent
       NestedSet<ArtifactsInOutputGroup> outputs,
       boolean isTest) {
     this.rootCauses =
-        (rootCauses == null) ? NestedSetBuilder.<Cause>emptySet(Order.STABLE_ORDER) : rootCauses;
+        (rootCauses == null) ? NestedSetBuilder.emptySet(Order.STABLE_ORDER) : rootCauses;
     this.executableTargetData = new ExecutableTargetData(targetAndData);
     ImmutableList.Builder<BuildEventId> postedAfterBuilder = ImmutableList.builder();
     this.label = targetAndData.getConfiguredTarget().getLabel();
-    if (targetAndData.getConfiguredTarget() instanceof AliasConfiguredTarget) {
-      this.aliasLabel =
-          ((AliasConfiguredTarget) targetAndData.getConfiguredTarget()).getOriginalLabel();
-    } else {
-      this.aliasLabel = label;
-    }
+    this.aliasLabel = targetAndData.getConfiguredTarget().getOriginalLabel();
     this.configuredTargetKey =
-        ConfiguredTargetKey.of(
-            targetAndData.getConfiguredTarget(), targetAndData.getConfiguration());
-    postedAfterBuilder.add(BuildEventId.targetConfigured(aliasLabel));
+        ConfiguredTargetKey.builder()
+            .setConfiguredTarget(targetAndData.getConfiguredTarget())
+            .setConfiguration(targetAndData.getConfiguration())
+            .build();
+    postedAfterBuilder.add(BuildEventIdUtil.targetConfigured(aliasLabel));
+    DetailedExitCode mostImportantDetailedExitCode = null;
     for (Cause cause : getRootCauses().toList()) {
-      postedAfterBuilder.add(BuildEventId.fromCause(cause));
+      mostImportantDetailedExitCode =
+          DetailedExitCodeComparator.chooseMoreImportantWithFirstIfTie(
+              mostImportantDetailedExitCode, cause.getDetailedExitCode());
+      postedAfterBuilder.add(cause.getIdProto());
     }
+    detailedExitCode = mostImportantDetailedExitCode;
     this.postedAfter = postedAfterBuilder.build();
     this.completionContext = completionContext;
     this.outputs = outputs;
@@ -149,14 +157,14 @@ public final class TargetCompleteEvent
     this.testTimeoutSeconds = isTest ? getTestTimeoutSeconds(targetAndData) : null;
     BuildConfiguration configuration = targetAndData.getConfiguration();
     this.configEventId =
-        configuration != null ? configuration.getEventId() : BuildEventId.nullConfigurationId();
+        configuration != null ? configuration.getEventId() : BuildEventIdUtil.nullConfigurationId();
     this.configurationEvent = configuration != null ? configuration.toBuildEvent() : null;
     this.testParams =
         isTest
             ? targetAndData.getConfiguredTarget().getProvider(TestProvider.class).getTestParams()
             : null;
     InstrumentedFilesInfo instrumentedFilesProvider =
-        targetAndData.getConfiguredTarget().get(InstrumentedFilesInfo.SKYLARK_CONSTRUCTOR);
+        targetAndData.getConfiguredTarget().get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
     if (instrumentedFilesProvider == null) {
       this.baselineCoverageArtifacts = null;
     } else {
@@ -209,11 +217,11 @@ public final class TargetCompleteEvent
    */
   public static TargetCompleteEvent createFailed(
       ConfiguredTargetAndData ct,
+      CompletionContext completionContext,
       NestedSet<Cause> rootCauses,
       NestedSet<ArtifactsInOutputGroup> outputs) {
     Preconditions.checkArgument(!rootCauses.isEmpty());
-    return new TargetCompleteEvent(
-        ct, rootCauses, CompletionContext.FAILED_COMPLETION_CTX, outputs, false);
+    return new TargetCompleteEvent(ct, rootCauses, completionContext, outputs, false);
   }
 
   /** Returns the label of the target associated with the event. */
@@ -254,14 +262,14 @@ public final class TargetCompleteEvent
 
   @Override
   public BuildEventId getEventId() {
-    return BuildEventId.targetCompleted(aliasLabel, configEventId);
+    return BuildEventIdUtil.targetCompleted(aliasLabel, configEventId);
   }
 
   @Override
   public Collection<BuildEventId> getChildrenEvents() {
     ImmutableList.Builder<BuildEventId> childrenBuilder = ImmutableList.builder();
     for (Cause cause : getRootCauses().toList()) {
-      childrenBuilder.add(BuildEventId.fromCause(cause));
+      childrenBuilder.add(cause.getIdProto());
     }
     if (isTest) {
       // For tests, announce all the test actions that will minimally happen (except for
@@ -270,10 +278,10 @@ public final class TargetCompleteEvent
       Label label = getLabel();
       for (int run = 0; run < Math.max(testParams.getRuns(), 1); run++) {
         for (int shard = 0; shard < Math.max(testParams.getShards(), 1); shard++) {
-          childrenBuilder.add(BuildEventId.testResult(label, run, shard, configEventId));
+          childrenBuilder.add(BuildEventIdUtil.testResult(label, run, shard, configEventId));
         }
       }
-      childrenBuilder.add(BuildEventId.testSummary(label, configEventId));
+      childrenBuilder.add(BuildEventIdUtil.testSummary(label, configEventId));
     }
     return childrenBuilder.build();
   }
@@ -327,16 +335,25 @@ public final class TargetCompleteEvent
 
   public static BuildEventStreamProtos.File.Builder newFileFromArtifact(
       String name, Artifact artifact, PathFragment relPath) {
-    File.Builder builder =
-        File.newBuilder()
-            .setName(
-                name == null
-                    ? artifact.getRootRelativePath().getRelative(relPath).getPathString()
-                    : name);
-    if (artifact.getRoot().getComponents() != null) {
-      builder.addAllPathPrefix(
-          Iterables.transform(artifact.getRoot().getComponents(), PathFragment::getPathString));
+    File.Builder builder = File.newBuilder();
+    if (name == null) {
+      String pathString = artifact.getRootRelativePath().getRelative(relPath).getPathString();
+      if (OS.getCurrent() != OS.WINDOWS) {
+        // TODO(b/36360490): Unix file names are currently always Latin-1 strings, even if they
+        // contain UTF-8 bytes. Protobuf specifies string fields to contain UTF-8 and passing a
+        // "Latin-1 with UTF-8 bytes" string will lead to double-encoding the bytes with the high
+        // bit set. Until we address the pervasive use of "Latin-1 with UTF-8 bytes" throughout
+        // Bazel (eg. by standardizing on UTF-8 on Unix systems) we will need to silently swap out
+        // the encoding at the protobuf library boundary. Windows does not suffer from this issue
+        // due to the corresponding OS APIs supporting UTF-16.
+        pathString =
+            new String(pathString.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+      }
+      builder.setName(pathString);
+    } else {
+      builder.setName(name);
     }
+    builder.addAllPathPrefix(artifact.getRoot().getComponents());
     return builder;
   }
 
@@ -382,7 +399,18 @@ public final class TargetCompleteEvent
     BuildEventStreamProtos.TargetComplete.Builder builder =
         BuildEventStreamProtos.TargetComplete.newBuilder();
 
-    builder.setSuccess(!failed());
+    boolean failed = failed();
+    builder.setSuccess(!failed);
+    if (detailedExitCode != null) {
+      if (!failed) {
+        BugReport.sendBugReport(
+            new IllegalStateException("Detailed exit code with success? " + detailedExitCode));
+      }
+      FailureDetails.FailureDetail failureDetail = detailedExitCode.getFailureDetail();
+      if (failureDetail != null) {
+        builder.setFailureDetail(failureDetail);
+      }
+    }
     builder.addAllTag(getTags());
     builder.addAllOutputGroup(getOutputFilesByGroup(converters.artifactGroupNamer()));
 
@@ -450,18 +478,14 @@ public final class TargetCompleteEvent
       }
       OutputGroup.Builder groupBuilder = OutputGroup.newBuilder();
       groupBuilder.setName(artifactsInOutputGroup.getOutputGroup());
-      groupBuilder.addFileSets(
-          namer.apply(
-              (new NestedSetView<Artifact>(artifactsInOutputGroup.getArtifacts())).identifier()));
+      groupBuilder.addFileSets(namer.apply(artifactsInOutputGroup.getArtifacts().toNode()));
       groups.add(groupBuilder.build());
     }
     if (baselineCoverageArtifacts != null) {
       groups.add(
           OutputGroup.newBuilder()
               .setName(BASELINE_COVERAGE)
-              .addFileSets(
-                  namer.apply(
-                      (new NestedSetView<Artifact>(baselineCoverageArtifacts).identifier())))
+              .addFileSets(namer.apply(baselineCoverageArtifacts.toNode()))
               .build());
     }
     return groups.build();

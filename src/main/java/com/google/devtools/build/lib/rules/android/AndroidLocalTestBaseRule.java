@@ -24,7 +24,7 @@ import static com.google.devtools.build.lib.rules.android.AndroidRuleClasses.get
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
-import com.google.devtools.build.lib.analysis.config.HostTransition;
+import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagProvider;
@@ -88,12 +88,12 @@ public class AndroidLocalTestBaseRule implements RuleDefinition {
                 .allowedFileTypes()
                 .nonconfigurable("defines an aspect of configuration")
                 .mandatoryProviders(ImmutableList.of(ConfigFeatureFlagProvider.id())))
-        .add(AndroidFeatureFlagSetProvider.getWhitelistAttribute(environment))
+        .add(AndroidFeatureFlagSetProvider.getAllowlistAttribute(environment))
         // TODO(b/38314524): Move $android_resources_busybox and :android_sdk to a separate
         // rule so they're not defined in multiple places
         .add(
             attr("$android_resources_busybox", LABEL)
-                .cfg(HostTransition.createFactory())
+                .cfg(ExecutionTransitionFactory.create())
                 .exec()
                 .value(environment.getToolsLabel(AndroidRuleClasses.DEFAULT_RESOURCES_BUSYBOX)))
         .add(
@@ -141,6 +141,17 @@ public class AndroidLocalTestBaseRule implements RuleDefinition {
         A list of file extensions to leave uncompressed in the resource apk.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("nocompress_extensions", STRING_LIST))
+        /* <!-- #BLAZE_RULE($android_local_test_base).ATTRIBUTE(resource_configuration_filters) -->
+        A list of resource configuration filters, such as 'en' that will limit the resources in the
+        apk to only the ones in the 'en' configuration.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("resource_configuration_filters", STRING_LIST))
+        /* <!-- #BLAZE_RULE($android_local_test_base).ATTRIBUTE(densities) -->
+        Densities to filter for when building the apk. A corresponding compatible-screens
+        section will also be added to the manifest if it does not already contain a
+        superset StarlarkListing.
+        <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("densities", STRING_LIST))
         .build();
   }
 

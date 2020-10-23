@@ -23,24 +23,24 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.SymbolGenerator;
-import com.google.devtools.build.lib.skylarkbuildapi.cpp.CcLinkingContextApi;
-import com.google.devtools.build.lib.skylarkbuildapi.cpp.LinkerInputApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.SkylarkType;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkList;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcLinkingContextApi;
+import com.google.devtools.build.lib.starlarkbuildapi.cpp.LinkerInputApi;
 import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkList;
+import net.starlark.java.eval.StarlarkSemantics;
 
 /** Structure of CcLinkingContext. */
 public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
@@ -164,7 +164,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   @Immutable
   public static class LinkerInput implements LinkerInputApi<LibraryToLink, Artifact> {
 
-    public static final SkylarkType TYPE = SkylarkType.of(LinkerInput.class);
+    public static final Depset.ElementType TYPE = Depset.ElementType.of(LinkerInput.class);
 
     // Identifies which target created the LinkerInput. It doesn't have to be unique between
     // LinkerInputs.
@@ -188,7 +188,12 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     }
 
     @Override
-    public Label getSkylarkOwner() throws EvalException {
+    public boolean isImmutable() {
+      return true; // immutable and Starlark-hashable
+    }
+
+    @Override
+    public Label getStarlarkOwner() throws EvalException {
       if (owner == null) {
         throw Starlark.errorf(
             "Owner is null. This means that some target upstream is of a rule type that uses the"
@@ -206,7 +211,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     }
 
     @Override
-    public Sequence<LibraryToLink> getSkylarkLibrariesToLink(StarlarkSemantics semantics) {
+    public Sequence<LibraryToLink> getStarlarkLibrariesToLink(StarlarkSemantics semantics) {
       return StarlarkList.immutableCopyOf(getLibraries());
     }
 
@@ -215,7 +220,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     }
 
     @Override
-    public Sequence<String> getSkylarkUserLinkFlags() {
+    public Sequence<String> getStarlarkUserLinkFlags() {
       return StarlarkList.immutableCopyOf(
           getUserLinkFlags().stream()
               .map(LinkOptions::get)
@@ -228,7 +233,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     }
 
     @Override
-    public Sequence<Artifact> getSkylarkNonCodeInputs() {
+    public Sequence<Artifact> getStarlarkNonCodeInputs() {
       return StarlarkList.immutableCopyOf(getNonCodeInputs());
     }
 
@@ -317,7 +322,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
       if (this == other) {
         return true;
       }
-      return ((this.owner == null && other.owner == null) || this.owner.equals(other.owner))
+      return Objects.equal(this.owner, other.owner)
           && this.libraries.equals(other.libraries)
           && this.userLinkFlags.equals(other.userLinkFlags)
           && this.linkstamps.equals(other.linkstamps)
@@ -425,19 +430,19 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   }
 
   @Override
-  public Depset getSkylarkLinkerInputs() {
+  public Depset getStarlarkLinkerInputs() {
     return Depset.of(LinkerInput.TYPE, linkerInputs);
   }
 
   @Override
-  public Sequence<String> getSkylarkUserLinkFlags() {
+  public Sequence<String> getStarlarkUserLinkFlags() {
     return StarlarkList.immutableCopyOf(getFlattenedUserLinkFlags());
   }
 
   @Override
-  public Object getSkylarkLibrariesToLink(StarlarkSemantics semantics) {
+  public Object getStarlarkLibrariesToLink(StarlarkSemantics semantics) {
     // TODO(plf): Flag can be removed already.
-    if (semantics.incompatibleDepsetForLibrariesToLinkGetter()) {
+    if (semantics.getBool(BuildLanguageOptions.INCOMPATIBLE_DEPSET_FOR_LIBRARIES_TO_LINK_GETTER)) {
       return Depset.of(LibraryToLink.TYPE, getLibraries());
     } else {
       return StarlarkList.immutableCopyOf(getLibraries().toList());
@@ -445,7 +450,7 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
   }
 
   @Override
-  public Depset getSkylarkNonCodeInputs() {
+  public Depset getStarlarkNonCodeInputs() {
     return Depset.of(Artifact.TYPE, getNonCodeInputs());
   }
 

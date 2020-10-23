@@ -22,18 +22,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleFunction;
 import com.google.devtools.build.lib.profiler.memory.AllocationTracker.RuleBytes;
-import com.google.devtools.build.lib.syntax.Debug;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.EvalUtils;
-import com.google.devtools.build.lib.syntax.HasBinary;
-import com.google.devtools.build.lib.syntax.Module;
-import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.ParserInput;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkCallable;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.SyntaxError;
-import com.google.devtools.build.lib.syntax.TokenKind;
 import com.google.perftools.profiles.ProfileProto.Function;
 import com.google.perftools.profiles.ProfileProto.Profile;
 import com.google.perftools.profiles.ProfileProto.Sample;
@@ -42,6 +30,20 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import net.starlark.java.eval.Debug;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.HasBinary;
+import net.starlark.java.eval.Module;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.FileOptions;
+import net.starlark.java.syntax.ParserInput;
+import net.starlark.java.syntax.SyntaxError;
+import net.starlark.java.syntax.TokenKind;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -63,8 +65,8 @@ public final class AllocationTrackerTest {
   private class SamplerValue implements HasBinary {
     @Override
     public Object binaryOp(TokenKind op, Object that, boolean thisLeft) throws EvalException {
-      if (op == TokenKind.PLUS && thisLeft && that instanceof Integer) {
-        int size = (Integer) that;
+      if (op == TokenKind.PLUS && thisLeft && that instanceof StarlarkInt) {
+        int size = ((StarlarkInt) that).toIntUnchecked(); // test values are small
         Object obj = new Object();
         live.add(obj); // ensure that obj outlives the test assertions
         tracker.sampleAllocation(1, "", obj, size);
@@ -187,20 +189,19 @@ public final class AllocationTrackerTest {
     assertThat(rules).containsExactly("myrule", new RuleBytes("myrule").addBytes(128L));
   }
 
-  private void exec(String... lines) throws SyntaxError, EvalException, InterruptedException {
-    Mutability mu = Mutability.create("test");
-    StarlarkThread thread =
-        StarlarkThread.builder(mu)
-            .useDefaultSemantics()
-            .setGlobals(
-                Module.createForBuiltins(
-                    ImmutableMap.of(
-                        "sample", new SamplerValue(),
-                        "myrule", new MyRuleFunction())))
-            .build();
-    ParserInput input = ParserInput.create(Joiner.on("\n").join(lines), "a.star");
-    Module module = thread.getGlobals();
-    EvalUtils.exec(input, module, thread);
+  private void exec(String... lines)
+      throws SyntaxError.Exception, EvalException, InterruptedException {
+    ParserInput input = ParserInput.fromString(Joiner.on("\n").join(lines), "a.star");
+    Module module =
+        Module.withPredeclared(
+            StarlarkSemantics.DEFAULT,
+            ImmutableMap.of(
+                "sample", new SamplerValue(),
+                "myrule", new MyRuleFunction()));
+    try (Mutability mu = Mutability.create("test")) {
+      StarlarkThread thread = new StarlarkThread(mu, StarlarkSemantics.DEFAULT);
+      Starlark.execFile(input, FileOptions.DEFAULT, module, thread);
+    }
   }
 
   // A fake Bazel rule. The allocation tracker reports retained memory broken down by rule class.

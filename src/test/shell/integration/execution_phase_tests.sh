@@ -221,8 +221,8 @@ EOF
       || fail "External change to action cache misdetected"
 
   # For completeness, make the changes to the same output file visibile and
-  # ensure Blaze notices them.  This is to sanity-check that we actually
-  # modified the right output file above.
+  # ensure Blaze notices them.  This is to check that we actually modified the
+  # right output file above.
   touch "${output_file}"
   bazel build package:foo >>"${TEST_log}" 2>&1 || fail "Should build"
   [[ "$(cat "${output_file}")" == foo ]] \
@@ -277,7 +277,6 @@ EOF
   expect_log "WARNING: .*: foo warning"
 }
 
-# Fails on CI: https://github.com/bazelbuild/bazel/issues/10679
 function test_max_open_file_descriptors() {
   echo "nfiles: hard $(ulimit -H -n), soft $(ulimit -S -n)"
 
@@ -363,6 +362,26 @@ EOF
   [[ -r brun ]] && fail "b was run"
 
   :  # So the exit code of the test is not inferred from that of "-r" above
+}
+
+# Trivial test to verify that the various flags that specify resource limits
+# accept the same syntax.
+function test_resource_flags_syntax() {
+  local threads=HOST_CPUS*0.8
+  local ram=HOST_RAM*0.8
+  # TODO(jmmv): The IncludeScanningModule is present in Bazel but is not
+  # part of the build, so this flag, which we should test here, isn't
+  # available: --experimental_include_scanning_parallelism="${threads}"
+  bazel build --nobuild \
+      --experimental_fsvc_threads="${threads}" \
+      --experimental_sandbox_async_tree_delete_idle_threads="${threads}" \
+      --jobs="${threads}" \
+      --legacy_globbing_threads="${threads}" \
+      --loading_phase_threads="${threads}" \
+      --local_cpu_resources="${threads}" \
+      --local_ram_resources="${ram}" \
+      --local_test_jobs="${threads}" \
+      || fail "Empty build failed"
 }
 
 run_suite "Integration tests of ${PRODUCT_NAME} using the execution phase."

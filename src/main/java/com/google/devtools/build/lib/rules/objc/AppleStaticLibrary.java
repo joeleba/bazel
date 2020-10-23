@@ -14,9 +14,9 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
+import static com.google.common.collect.ImmutableListMultimap.toImmutableListMultimap;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.MULTI_ARCH_LINKED_ARCHIVES;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
@@ -25,15 +25,17 @@ import com.google.common.collect.Multimap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.ApplePlatform;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.objc.ObjcProvider.Key;
@@ -56,10 +58,6 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
       ImmutableSet.<Key<?>>of(
           ObjcProvider.SDK_DYLIB, ObjcProvider.SDK_FRAMEWORK, ObjcProvider.WEAK_SDK_FRAMEWORK);
 
-  @VisibleForTesting
-  static final String UNSUPPORTED_PLATFORM_TYPE_ERROR_FORMAT =
-      "Unsupported platform type \"%s\"";
-
   @Override
   public final ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
@@ -68,24 +66,24 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
 
     ImmutableListMultimap<String, ConfiguredTargetAndData> cpuToCTATDepsCollectionMap =
         MultiArchBinarySupport.transformMap(
-            ruleContext.getPrerequisiteCofiguredTargetAndTargetsByConfiguration(
-                "deps", Mode.SPLIT));
+            ruleContext.getPrerequisiteCofiguredTargetAndTargetsByConfiguration("deps"));
 
     ImmutableListMultimap<String, ObjcProvider> cpuToObjcAvoidDepsMap =
         MultiArchBinarySupport.transformMap(
             ruleContext.getPrerequisitesByConfiguration(
                 AppleStaticLibraryRule.AVOID_DEPS_ATTR_NAME,
-                Mode.SPLIT,
-                ObjcProvider.SKYLARK_CONSTRUCTOR));
+                ObjcProvider.STARLARK_CONSTRUCTOR));
 
     ImmutableListMultimap<String, CcInfo> cpuToCcAvoidDepsMap =
         MultiArchBinarySupport.transformMap(
             ruleContext.getPrerequisitesByConfiguration(
-                AppleStaticLibraryRule.AVOID_DEPS_ATTR_NAME, Mode.SPLIT, CcInfo.PROVIDER));
+                AppleStaticLibraryRule.AVOID_DEPS_ATTR_NAME,
+                CcInfo.PROVIDER));
 
     Iterable<ObjcProtoProvider> avoidProtoProviders =
-        ruleContext.getPrerequisites(AppleStaticLibraryRule.AVOID_DEPS_ATTR_NAME, Mode.TARGET,
-            ObjcProtoProvider.SKYLARK_CONSTRUCTOR);
+        ruleContext.getPrerequisites(
+            AppleStaticLibraryRule.AVOID_DEPS_ATTR_NAME,
+            ObjcProtoProvider.STARLARK_CONSTRUCTOR);
     NestedSet<Artifact> protosToAvoid = protoArtifactsToAvoid(avoidProtoProviders);
 
     Map<BuildConfiguration, CcToolchainProvider> childConfigurationsAndToolchains =
@@ -100,11 +98,21 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
             .add(ruleIntermediateArtifacts.combinedArchitectureArchive());
 
     ObjcProvider.Builder objcProviderBuilder =
-        new ObjcProvider.Builder(ruleContext.getAnalysisEnvironment().getSkylarkSemantics());
+        new ObjcProvider.NativeBuilder(ruleContext.getAnalysisEnvironment().getStarlarkSemantics());
 
     ImmutableListMultimap<BuildConfiguration, ObjcProtoProvider> objcProtoProvidersByConfig =
-        ruleContext.getPrerequisitesByConfiguration(
-            "deps", Mode.SPLIT, ObjcProtoProvider.SKYLARK_CONSTRUCTOR);
+        ruleContext.getPrerequisiteConfiguredTargets("deps").stream()
+            .filter(
+                prerequisite ->
+                    prerequisite.getConfiguredTarget().get(ObjcProtoProvider.STARLARK_CONSTRUCTOR)
+                        != null)
+            .collect(
+                toImmutableListMultimap(
+                    ConfiguredTargetAndData::getConfiguration,
+                    prerequisite ->
+                        prerequisite
+                            .getConfiguredTarget()
+                            .get(ObjcProtoProvider.STARLARK_CONSTRUCTOR)));
     Multimap<String, ObjcProtoProvider> objcProtoProvidersMap =
         MultiArchBinarySupport.transformMap(objcProtoProvidersByConfig);
 
@@ -146,7 +154,8 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
               protosObjcProvider);
       ObjcProvider objcProvider =
           common
-              .getObjcProvider()
+              .getObjcProviderBuilder()
+              .build()
               .subtractSubtrees(
                   cpuToObjcAvoidDepsMap.get(childCpu),
                   cpuToCcAvoidDepsMap.get(childCpu).stream()
@@ -164,7 +173,8 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
               .build();
 
       compilationSupport
-          .registerCompileAndArchiveActions(common.getCompilationArtifacts().get(), objcProvider)
+          .registerCompileAndArchiveActions(
+              common.getCompilationArtifacts().get(), ObjcCompilationContext.EMPTY)
           .registerFullyLinkAction(
               objcProvider, intermediateArtifacts.strippedSingleArchitectureLibrary())
           .validateAttributes();
@@ -173,13 +183,28 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
       addTransitivePropagatedKeys(objcProviderBuilder, objcProvider);
     }
 
-    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    ImmutableListMultimap<BuildConfiguration, OutputGroupInfo> buildConfigToOutputGroupInfoMap =
+        ruleContext.getPrerequisitesByConfiguration("deps", OutputGroupInfo.STARLARK_CONSTRUCTOR);
+    NestedSetBuilder<Artifact> headerTokens = NestedSetBuilder.stableOrder();
+    for (Map.Entry<BuildConfiguration, OutputGroupInfo> entry :
+        buildConfigToOutputGroupInfoMap.entries()) {
+      OutputGroupInfo dep = entry.getValue();
+      headerTokens.addTransitive(dep.getOutputGroup(CcCompilationHelper.HIDDEN_HEADER_TOKENS));
+    }
+    outputGroupCollector.put(OutputGroupInfo.VALIDATION, headerTokens.build());
 
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    ApplePlatform platform = null;
+    try {
+      platform = appleConfiguration.getMultiArchPlatform(platformType);
+    } catch (IllegalArgumentException e) {
+      ruleContext.throwWithRuleError(e);
+    }
     new LipoSupport(ruleContext)
         .registerCombineArchitecturesAction(
             librariesToLipo.build(),
             ruleIntermediateArtifacts.combinedArchitectureArchive(),
-            appleConfiguration.getMultiArchPlatform(platformType));
+            platform);
 
     RuleConfiguredTargetBuilder targetBuilder =
         ObjcRuleClasses.ruleConfiguredTarget(ruleContext, filesToBuild.build());
@@ -191,7 +216,7 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
 
     if (appleConfiguration.shouldLinkingRulesPropagateObjc()) {
       targetBuilder.addNativeDeclaredProvider(objcProvider);
-      targetBuilder.addSkylarkTransitiveInfo(ObjcProvider.SKYLARK_NAME, objcProvider);
+      targetBuilder.addStarlarkTransitiveInfo(ObjcProvider.STARLARK_NAME, objcProvider);
     }
 
     targetBuilder
@@ -219,7 +244,7 @@ public class AppleStaticLibrary implements RuleConfiguredTargetFactory {
 
     CompilationArtifacts compilationArtifacts = new CompilationArtifacts.Builder().build();
 
-    return new ObjcCommon.Builder(ruleContext, buildConfiguration)
+    return new ObjcCommon.Builder(ObjcCommon.Purpose.LINK_ONLY, ruleContext, buildConfiguration)
         .setCompilationAttributes(
             CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
         .setCompilationArtifacts(compilationArtifacts)

@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
@@ -37,11 +38,11 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
+import com.google.devtools.build.lib.analysis.actions.Compression;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory.CoverageReportActionsWrapper;
 import com.google.devtools.build.lib.analysis.test.TestProvider;
@@ -53,6 +54,7 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.exec.SpawnStrategyResolver;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
@@ -103,7 +105,7 @@ public final class CoverageReportActionBuilder {
     private final String locationMessage;
     private final RunfilesSupplier runfilesSupplier;
 
-    protected CoverageReportAction(
+    CoverageReportAction(
         ActionOwner owner,
         NestedSet<Artifact> inputs,
         ImmutableSet<Artifact> outputs,
@@ -140,15 +142,12 @@ public final class CoverageReportActionBuilder {
             LOCAL_RESOURCES);
         List<SpawnResult> spawnResults =
             actionExecutionContext
-                .getContext(SpawnStrategy.class)
+                .getContext(SpawnStrategyResolver.class)
                 .exec(spawn, actionExecutionContext);
         actionExecutionContext.getEventHandler().handle(Event.info(locationMessage));
         return ActionResult.create(spawnResults);
       } catch (ExecException e) {
-        throw e.toActionExecutionException(
-            "Coverage report generation failed: ",
-            actionExecutionContext.getVerboseFailures(),
-            this);
+        throw e.toActionExecutionException(this);
       }
     }
 
@@ -158,7 +157,15 @@ public final class CoverageReportActionBuilder {
     }
 
     @Override
-    protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+    protected String getRawProgressMessage() {
+      return "Coverage report generation";
+    }
+
+    @Override
+    protected void computeKey(
+        ActionKeyContext actionKeyContext,
+        @Nullable ArtifactExpander artifactExpander,
+        Fingerprint fp) {
       fp.addStrings(command);
     }
 
@@ -232,7 +239,7 @@ public final class CoverageReportActionBuilder {
         lcovArtifact,
         Joiner.on('\n').join(filepaths),
         /*makeExecutable=*/ false,
-        FileWriteAction.Compression.DISALLOW);
+        Compression.DISALLOW);
   }
 
   /**

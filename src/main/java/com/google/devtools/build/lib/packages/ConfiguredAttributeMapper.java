@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType.Selector;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
-import com.google.devtools.build.lib.syntax.EvalException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -32,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
 
 /**
  * {@link AttributeMap} implementation that binds a rule's attribute as follows:
@@ -57,8 +57,7 @@ public class ConfiguredAttributeMapper extends AbstractAttributeMapper {
 
   private ConfiguredAttributeMapper(Rule rule,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions) {
-    super(Preconditions.checkNotNull(rule).getPackage(), rule.getRuleClassObject(), rule.getLabel(),
-        rule.getAttributeContainer());
+    super(Preconditions.checkNotNull(rule));
     this.configConditions = configConditions;
     this.rule = rule;
   }
@@ -109,6 +108,14 @@ public class ConfiguredAttributeMapper extends AbstractAttributeMapper {
         // predicates ineligible for "None" values. But no user-facing attributes should
         // do that anyway, so that isn't a loss.
         Attribute attr = getAttributeDefinition(attributeName);
+        if (attr.isMandatory()) {
+          throw new EvalException(
+              rule.getLocation(),
+              String.format(
+                  "Mandatory attribute '%s' resolved to 'None' after evaluating 'select'"
+                      + " expression",
+                  attributeName));
+        }
         Verify.verify(attr.getCondition() == Predicates.<AttributeMap>alwaysTrue());
         resolvedList.add((T) attr.getDefaultValue(null)); // unchecked cast
       } else {

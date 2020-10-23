@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.analysis.AspectValue;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
@@ -33,7 +34,6 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.TargetAccessor;
-import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.util.CommandDescriptionForm;
@@ -43,7 +43,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -80,15 +79,14 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
       options.includeCommandline |= options.includeParamFiles;
 
       for (ConfiguredTargetValue configuredTargetValue : partialResult) {
-        List<ActionAnalysisMetadata> actions = configuredTargetValue.getActions();
-        for (ActionAnalysisMetadata action : actions) {
+        for (ActionAnalysisMetadata action : configuredTargetValue.getActions()) {
           writeAction(action, printStream);
         }
         if (options.useAspects) {
           if (configuredTargetValue.getConfiguredTarget() instanceof RuleConfiguredTarget) {
             for (AspectValue aspectValue : accessor.getAspectValues(configuredTargetValue)) {
-              for (int i = 0; i < aspectValue.getNumActions(); i++) {
-                writeAction(aspectValue.getAction(i), printStream);
+              for (ActionAnalysisMetadata action : aspectValue.getActions()) {
+                writeAction(action, printStream);
               }
             }
           }
@@ -177,7 +175,7 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
       ActionExecutionMetadata actionExecutionMetadata = (ActionExecutionMetadata) action;
       stringBuilder
           .append("  ActionKey: ")
-          .append(actionExecutionMetadata.getKey(actionKeyContext))
+          .append(actionExecutionMetadata.getKey(actionKeyContext, /*artifactExpander=*/ null))
           .append('\n');
     }
 

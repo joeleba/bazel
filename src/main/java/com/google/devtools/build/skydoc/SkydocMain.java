@@ -22,101 +22,19 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
-import com.google.devtools.build.lib.skylarkbuildapi.TopLevelBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidAssetsInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidBinaryDataInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidCcLinkParamsProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidDex2OatInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidFeatureFlagSetProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidIdeInfoProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidIdlProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidLibraryAarInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidLibraryResourceClassJarProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidManifestInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidPreDexJarProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidProguardInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidSdkProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.ProguardMappingProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.android.UsesDataBindingProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.cpp.CcBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.java.GeneratedExtensionRegistryProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.java.JavaBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.javascript.JsModuleInfoApi;
-import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.proto.ProtoBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.python.PyBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.repository.RepositoryBootstrap;
-import com.google.devtools.build.lib.skylarkbuildapi.stubs.ProviderStub;
-import com.google.devtools.build.lib.skylarkbuildapi.stubs.SkylarkAspectStub;
-import com.google.devtools.build.lib.skylarkbuildapi.test.TestingBootstrap;
-import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.EvalUtils;
-import com.google.devtools.build.lib.syntax.Expression;
-import com.google.devtools.build.lib.syntax.ExpressionStatement;
-import com.google.devtools.build.lib.syntax.LoadStatement;
-import com.google.devtools.build.lib.syntax.Module;
-import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.ParserInput;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkCallable;
-import com.google.devtools.build.lib.syntax.StarlarkFile;
-import com.google.devtools.build.lib.syntax.StarlarkFunction;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
-import com.google.devtools.build.lib.syntax.StarlarkThread.Extension;
-import com.google.devtools.build.lib.syntax.Statement;
-import com.google.devtools.build.lib.syntax.StringLiteral;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeActionsInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeBuildApiGlobals;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeConfigApi;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeDefaultInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeOutputGroupInfo.FakeOutputGroupInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeSkylarkAttrApi;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeSkylarkCommandLineApi;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeSkylarkNativeModuleApi;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeSkylarkRuleFunctionsApi;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.starlarkbuildapi.android.AndroidDex2OatInfoApi;
+import com.google.devtools.build.lib.starlarkbuildapi.android.UsesDataBindingProviderApi;
+import com.google.devtools.build.lib.starlarkbuildapi.java.GeneratedExtensionRegistryProviderApi;
+import com.google.devtools.build.lib.starlarkbuildapi.java.JavaNativeLibraryInfoApi;
+import com.google.devtools.build.lib.starlarkbuildapi.javascript.JsModuleInfoApi;
+import com.google.devtools.build.skydoc.fakebuildapi.FakeApi;
 import com.google.devtools.build.skydoc.fakebuildapi.FakeStructApi;
-import com.google.devtools.build.skydoc.fakebuildapi.FakeStructApi.FakeStructProviderApi;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidApplicationResourceInfo.FakeAndroidApplicationResourceInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidDeviceBrokerInfo.FakeAndroidDeviceBrokerInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidInstrumentationInfo.FakeAndroidInstrumentationInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidNativeLibsInfo.FakeAndroidNativeLibsInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidResourcesInfo.FakeAndroidResourcesInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeAndroidSkylarkCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.android.FakeApkInfo.FakeApkInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.apple.FakeAppleCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.config.FakeConfigGlobalLibrary;
-import com.google.devtools.build.skydoc.fakebuildapi.config.FakeConfigSkylarkCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakeCcInfo;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakeCcModule;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakeCcToolchainConfigInfo;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakeGoWrapCcHelper;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakePyCcLinkParamsProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakePyWrapCcHelper;
-import com.google.devtools.build.skydoc.fakebuildapi.cpp.FakePyWrapCcInfo;
-import com.google.devtools.build.skydoc.fakebuildapi.java.FakeJavaCcLinkParamsProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.java.FakeJavaCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.java.FakeJavaInfo.FakeJavaInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.java.FakeJavaProtoCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.platform.FakePlatformCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.proto.FakeProtoInfoApiProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.proto.FakeProtoModule;
-import com.google.devtools.build.skydoc.fakebuildapi.python.FakePyInfo.FakePyInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.python.FakePyRuntimeInfo.FakePyRuntimeInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.python.FakePyStarlarkTransitions;
-import com.google.devtools.build.skydoc.fakebuildapi.repository.FakeRepositoryModule;
-import com.google.devtools.build.skydoc.fakebuildapi.test.FakeAnalysisFailureInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.test.FakeAnalysisTestResultInfoProvider;
-import com.google.devtools.build.skydoc.fakebuildapi.test.FakeCoverageCommon;
-import com.google.devtools.build.skydoc.fakebuildapi.test.FakeTestingModule;
 import com.google.devtools.build.skydoc.rendering.AspectInfoWrapper;
 import com.google.devtools.build.skydoc.rendering.DocstringParseException;
 import com.google.devtools.build.skydoc.rendering.ProtoRenderer;
@@ -140,36 +58,55 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Module;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkFunction;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Expression;
+import net.starlark.java.syntax.ExpressionStatement;
+import net.starlark.java.syntax.FileOptions;
+import net.starlark.java.syntax.ParserInput;
+import net.starlark.java.syntax.Program;
+import net.starlark.java.syntax.StarlarkFile;
+import net.starlark.java.syntax.Statement;
+import net.starlark.java.syntax.StringLiteral;
+import net.starlark.java.syntax.SyntaxError;
 
 /**
  * Main entry point for the Skydoc binary.
  *
- * <p>Skydoc generates human-readable documentation for relevant details of skylark files by running
- * a skylark interpreter with a fake implementation of the build API.
+ * <p>Skydoc generates human-readable documentation for relevant details of Starlark files by
+ * running a Starlark interpreter with a fake implementation of the build API.
  *
- * <p>Currently, Skydoc generates documentation for skylark rule definitions (discovered by
+ * <p>Currently, Skydoc generates documentation for Starlark rule definitions (discovered by
  * invocations of the build API function {@code rule()}.
  *
  * <p>Usage:
  *
  * <pre>
- *   skydoc {target_skylark_file_label} {output_file} [symbol_name]...
+ *   skydoc {target_starlark_file_label} {output_file} [symbol_name]...
  * </pre>
  *
- * <p>Generates documentation for all exported symbols of the target skylark file that are specified
- * in the list of symbol names. If no symbol names are supplied, outputs documentation for all
- * exported symbols in the target skylark file.
+ * <p>Generates documentation for all exported symbols of the target Starlark file that are
+ * specified in the list of symbol names. If no symbol names are supplied, outputs documentation for
+ * all exported symbols in the target Starlark file.
  */
 public class SkydocMain {
 
   private final EventHandler eventHandler = new SystemOutEventHandler();
   private final LinkedHashSet<Path> pending = new LinkedHashSet<>();
-  private final Map<Path, StarlarkThread> loaded = new HashMap<>();
-  private final SkylarkFileAccessor fileAccessor;
+  private final Map<Path, Module> loaded = new HashMap<>();
+  private final StarlarkFileAccessor fileAccessor;
   private final List<String> depRoots;
   private final String workspaceName;
 
-  public SkydocMain(SkylarkFileAccessor fileAccessor, String workspaceName, List<String> depRoots) {
+  public SkydocMain(
+      StarlarkFileAccessor fileAccessor, String workspaceName, List<String> depRoots) {
     this.fileAccessor = fileAccessor;
     this.workspaceName = workspaceName;
     if (depRoots.isEmpty()) {
@@ -186,12 +123,10 @@ public class SkydocMain {
           DocstringParseException {
     OptionsParser parser =
         OptionsParser.builder()
-            .optionsClasses(StarlarkSemanticsOptions.class, SkydocOptions.class)
+            .optionsClasses(BuildLanguageOptions.class, SkydocOptions.class)
             .build();
     parser.parseAndExitUponError(args);
-    StarlarkSemanticsOptions semanticsOptions = parser.getOptions(StarlarkSemanticsOptions.class);
-    semanticsOptions.incompatibleDepsetUnion = false;
-    semanticsOptions.incompatibleDisableDeprecatedAttrParams = false;
+    BuildLanguageOptions semanticsOptions = parser.getOptions(BuildLanguageOptions.class);
     semanticsOptions.incompatibleNewActionsApi = false;
     SkydocOptions skydocOptions = parser.getOptions(SkydocOptions.class);
 
@@ -221,7 +156,7 @@ public class SkydocMain {
     try {
       new SkydocMain(new FilesystemFileAccessor(), skydocOptions.workspaceName, depRoots)
           .eval(
-              semanticsOptions.toSkylarkSemantics(),
+              semanticsOptions.toStarlarkSemantics(),
               targetFileLabel,
               ruleInfoMap,
               providerInfoMap,
@@ -276,11 +211,11 @@ public class SkydocMain {
   }
 
   /**
-   * Evaluates/interprets the skylark file at a given path and its transitive skylark dependencies
+   * Evaluates/interprets the Starlark file at a given path and its transitive Starlark dependencies
    * using a fake build API and collects information about all rule definitions made in the root
-   * skylark file.
+   * Starlark file.
    *
-   * @param label the label of the skylark file to evaluate
+   * @param label the label of the Starlark file to evaluate
    * @param ruleInfoMap a map builder to be populated with rule definition information for named
    *     rules. Keys are exported names of rules, and values are their {@link RuleInfo} rule
    *     descriptions. For example, 'my_rule = rule(...)' has key 'my_rule'
@@ -294,12 +229,12 @@ public class SkydocMain {
    * @param aspectInfoMap a map builder to be populated with aspect definition information for named
    *     aspects. Keys are exported names of aspects, and values are the {@link AspectInfo} asepct
    *     descriptions. For example, 'my_aspect = aspect(...)' has key 'my_aspect'
-   * @param moduleDocMap a map builder to be populated with module docstrings for skylark file. Keys
-   *     are labels of skylark files and values are their module docstrings. If the module has no
-   *     docstring, an empty string will be printed.
+   * @param moduleDocMap a map builder to be populated with module docstrings for Starlark file.
+   *     Keys are labels of Starlark files and values are their module docstrings. If the module has
+   *     no docstring, an empty string will be printed.
    * @throws InterruptedException if evaluation is interrupted
    */
-  public StarlarkThread eval(
+  public Module eval(
       StarlarkSemantics semantics,
       Label label,
       ImmutableMap.Builder<String, RuleInfo> ruleInfoMap,
@@ -316,27 +251,26 @@ public class SkydocMain {
 
     List<AspectInfoWrapper> aspectInfoList = new ArrayList<>();
 
-    StarlarkThread thread =
+    Module module =
         recursiveEval(
             semantics, label, ruleInfoList, providerInfoList, aspectInfoList, moduleDocMap);
 
-    Map<BaseFunction, RuleInfoWrapper> ruleFunctions =
+    Map<StarlarkCallable, RuleInfoWrapper> ruleFunctions =
         ruleInfoList.stream()
             .collect(
                 Collectors.toMap(RuleInfoWrapper::getIdentifierFunction, Functions.identity()));
 
-    Map<BaseFunction, ProviderInfoWrapper> providerInfos =
+    Map<StarlarkCallable, ProviderInfoWrapper> providerInfos =
         providerInfoList.stream()
             .collect(Collectors.toMap(ProviderInfoWrapper::getIdentifier, Functions.identity()));
 
-    Map<BaseFunction, AspectInfoWrapper> aspectFunctions =
+    Map<StarlarkCallable, AspectInfoWrapper> aspectFunctions =
         aspectInfoList.stream()
             .collect(
                 Collectors.toMap(AspectInfoWrapper::getIdentifierFunction, Functions.identity()));
 
-    // Sort the bindings so their ordering is deterministic.
-    TreeMap<String, Object> sortedBindings =
-        new TreeMap<>(thread.getGlobals().getExportedBindings());
+    // Sort the globals bindings by name.
+    TreeMap<String, Object> sortedBindings = new TreeMap<>(module.getExportedGlobals());
 
     for (Entry<String, Object> envEntry : sortedBindings.entrySet()) {
       if (ruleFunctions.containsKey(envEntry.getValue())) {
@@ -367,7 +301,7 @@ public class SkydocMain {
       }
     }
 
-    return thread;
+    return module;
   }
 
   /**
@@ -410,16 +344,16 @@ public class SkydocMain {
   }
 
   /**
-   * Recursively evaluates/interprets the skylark file at a given path and its transitive skylark
+   * Recursively evaluates/interprets the Starlark file at a given path and its transitive Starlark
    * dependencies using a fake build API and collects information about all rule definitions made in
    * those files.
    *
-   * @param label the label of the skylark file to evaluate
+   * @param label the label of the Starlark file to evaluate
    * @param ruleInfoList a collection of all rule definitions made so far (using rule()); this
    *     method will add to this list as it evaluates additional files
    * @throws InterruptedException if evaluation is interrupted
    */
-  private StarlarkThread recursiveEval(
+  private Module recursiveEval(
       StarlarkSemantics semantics,
       Label label,
       List<RuleInfoWrapper> ruleInfoList,
@@ -436,52 +370,69 @@ public class SkydocMain {
     }
     pending.add(path);
 
-    ParserInput parserInputSource = getInputSource(path.toString());
-    StarlarkFile file = StarlarkFile.parse(parserInputSource);
-    Event.replayEventsOn(eventHandler, file.errors());
+    // Add fake build API.
+    ImmutableMap.Builder<String, Object> env = ImmutableMap.builder();
+    FakeApi.addPredeclared(env, ruleInfoList, providerInfoList, aspectInfoList);
+    addMorePredeclared(env);
+    Module module = Module.withPredeclared(semantics, env.build());
 
-    moduleDocMap.put(label, getModuleDoc(file));
+    // parse & compile (and get doc)
+    ParserInput input = getInputSource(path.toString());
+    Program prog;
+    try {
+      StarlarkFile file = StarlarkFile.parse(input, FileOptions.DEFAULT);
+      moduleDocMap.put(label, getModuleDoc(file));
+      prog = Program.compileFile(file, module);
+    } catch (SyntaxError.Exception ex) {
+      Event.replayEventsOn(eventHandler, ex.errors());
+      throw new StarlarkEvaluationException(ex.getMessage());
+    }
 
-    Map<String, Extension> imports = new HashMap<>();
-    for (Statement stmt : file.getStatements()) {
-      if (stmt instanceof LoadStatement) {
-        LoadStatement load = (LoadStatement) stmt;
-        String module = load.getImport().getValue();
-        Label relativeLabel = label.getRelativeWithRemapping(module, ImmutableMap.of());
-        try {
-          StarlarkThread importThread =
-              recursiveEval(
-                  semantics,
-                  relativeLabel,
-                  ruleInfoList,
-                  providerInfoList,
-                  aspectInfoList,
-                  moduleDocMap);
-          imports.put(module, new Extension(importThread));
-        } catch (NoSuchFileException noSuchFileException) {
-          throw new StarlarkEvaluationException(
-              String.format(
-                  "File %s imported '%s', yet %s was not found, even at roots %s.",
-                  path, module, pathOfLabel(relativeLabel, semantics), depRoots),
-              noSuchFileException);
-        }
+    // process loads
+    Map<String, Module> imports = new HashMap<>();
+    for (String load : prog.getLoads()) {
+      Label relativeLabel = label.getRelativeWithRemapping(load, ImmutableMap.of());
+      try {
+        Module loadedModule =
+            recursiveEval(
+                semantics,
+                relativeLabel,
+                ruleInfoList,
+                providerInfoList,
+                aspectInfoList,
+                moduleDocMap);
+        imports.put(load, loadedModule);
+      } catch (NoSuchFileException noSuchFileException) {
+        throw new StarlarkEvaluationException(
+            String.format(
+                "File %s imported '%s', yet %s was not found, even at roots %s.",
+                path, load, pathOfLabel(relativeLabel, semantics), depRoots),
+            noSuchFileException);
       }
     }
 
-    StarlarkThread thread =
-        evalSkylarkBody(semantics, file, imports, ruleInfoList, providerInfoList, aspectInfoList);
+    // execute
+    try (Mutability mu = Mutability.create("Skydoc")) {
+      StarlarkThread thread = new StarlarkThread(mu, semantics);
+      // We use the default print handler, which writes to stderr.
+      thread.setLoader(imports::get);
+
+      Starlark.execFileProgram(prog, module, thread);
+    } catch (EvalException | InterruptedException ex) {
+      // This exception class seems a bit unnecessary. Replace with EvalException?
+      throw new StarlarkEvaluationException("Starlark evaluation error", ex);
+    }
 
     pending.remove(path);
-    thread.mutability().freeze();
-    loaded.put(path, thread);
-    return thread;
+    loaded.put(path, module);
+    return module;
   }
 
   private Path pathOfLabel(Label label, StarlarkSemantics semantics) {
     String workspacePrefix = "";
-    if (!label.getWorkspaceRoot(semantics).isEmpty()
+    if (!label.getWorkspaceRootForStarlarkOnly(semantics).isEmpty()
         && !label.getWorkspaceName().equals(workspaceName)) {
-      workspacePrefix = label.getWorkspaceRoot(semantics) + "/";
+      workspacePrefix = label.getWorkspaceRootForStarlarkOnly(semantics) + "/";
     }
 
     return Paths.get(workspacePrefix + label.toPathFragment());
@@ -498,115 +449,31 @@ public class SkydocMain {
     throw new NoSuchFileException(bzlWorkspacePath);
   }
 
-  /** Evaluates the AST from a single skylark file, given the already-resolved imports. */
-  private StarlarkThread evalSkylarkBody(
-      StarlarkSemantics semantics,
-      StarlarkFile file,
-      Map<String, Extension> imports,
-      List<RuleInfoWrapper> ruleInfoList,
-      List<ProviderInfoWrapper> providerInfoList,
-      List<AspectInfoWrapper> aspectInfoList)
-      throws InterruptedException, StarlarkEvaluationException {
+  private static void addMorePredeclared(ImmutableMap.Builder<String, Object> env) {
+    addNonBootstrapGlobals(env);
 
-    StarlarkThread thread =
-        createStarlarkThread(
-            semantics,
-            globalFrame(ruleInfoList, providerInfoList, aspectInfoList),
-            imports);
-    Module module = thread.getGlobals();
+    // Add dummy declarations that would come from packages.StarlarkLibrary.COMMON
+    // were Skydoc allowed to depend on it. See hack for select below.
+    env.put(
+        "depset",
+        new StarlarkCallable() {
+          @Override
+          public Object fastcall(StarlarkThread thread, Object[] positional, Object[] named) {
+            // Accept any arguments, return empty Depset.
+            return Depset.of(
+                Depset.ElementType.EMPTY, NestedSetBuilder.emptySet(Order.STABLE_ORDER));
+          }
 
-    try {
-      EvalUtils.exec(file, module, thread);
-    } catch (EvalException | InterruptedException ex) {
-      // This exception class seems a bit unnecessary. Replace with EvalException?
-      throw new StarlarkEvaluationException("Starlark evaluation error", ex);
-    }
-
-    thread.mutability().freeze();
-
-    return thread;
-  }
-
-  /**
-   * Initialize and return a global frame containing the fake build API.
-   *
-   * @param ruleInfoList the list of {@link RuleInfo} objects, to which rule() invocation
-   *     information will be added
-   * @param providerInfoList the list of {@link ProviderInfo} objects, to which provider()
-   *     invocation information will be added
-   */
-  private static Module globalFrame(
-      List<RuleInfoWrapper> ruleInfoList,
-      List<ProviderInfoWrapper> providerInfoList,
-      List<AspectInfoWrapper> aspectInfoList) {
-    TopLevelBootstrap topLevelBootstrap =
-        new TopLevelBootstrap(
-            new FakeBuildApiGlobals(),
-            new FakeSkylarkAttrApi(),
-            new FakeSkylarkCommandLineApi(),
-            new FakeSkylarkNativeModuleApi(),
-            new FakeSkylarkRuleFunctionsApi(ruleInfoList, providerInfoList, aspectInfoList),
-            new FakeStructProviderApi(),
-            new FakeOutputGroupInfoProvider(),
-            new FakeActionsInfoProvider(),
-            new FakeDefaultInfoProvider());
-    AndroidBootstrap androidBootstrap =
-        new AndroidBootstrap(
-            new FakeAndroidSkylarkCommon(),
-            new FakeApkInfoProvider(),
-            new FakeAndroidInstrumentationInfoProvider(),
-            new FakeAndroidDeviceBrokerInfoProvider(),
-            new FakeAndroidResourcesInfoProvider(),
-            new FakeAndroidNativeLibsInfoProvider(),
-            new FakeAndroidApplicationResourceInfoProvider());
-    AppleBootstrap appleBootstrap = new AppleBootstrap(new FakeAppleCommon());
-    ConfigBootstrap configBootstrap =
-        new ConfigBootstrap(
-            new FakeConfigSkylarkCommon(), new FakeConfigApi(), new FakeConfigGlobalLibrary());
-    CcBootstrap ccBootstrap =
-        new CcBootstrap(
-            new FakeCcModule(),
-            new FakeCcInfo.Provider(),
-            new FakeCcToolchainConfigInfo.Provider(),
-            new FakePyWrapCcHelper(),
-            new FakeGoWrapCcHelper(),
-            new FakePyWrapCcInfo.Provider(),
-            new FakePyCcLinkParamsProvider.Provider());
-    JavaBootstrap javaBootstrap =
-        new JavaBootstrap(
-            new FakeJavaCommon(),
-            new FakeJavaInfoProvider(),
-            new FakeJavaProtoCommon(),
-            new FakeJavaCcLinkParamsProvider.Provider());
-    PlatformBootstrap platformBootstrap = new PlatformBootstrap(new FakePlatformCommon());
-    ProtoBootstrap protoBootstrap =
-        new ProtoBootstrap(
-            new FakeProtoInfoApiProvider(),
-            new FakeProtoModule(),
-            new SkylarkAspectStub(),
-            new ProviderStub());
-    PyBootstrap pyBootstrap =
-        new PyBootstrap(
-            new FakePyInfoProvider(),
-            new FakePyRuntimeInfoProvider(),
-            new FakePyStarlarkTransitions());
-    RepositoryBootstrap repositoryBootstrap =
-        new RepositoryBootstrap(new FakeRepositoryModule(ruleInfoList));
-    TestingBootstrap testingBootstrap =
-        new TestingBootstrap(
-            new FakeTestingModule(),
-            new FakeCoverageCommon(),
-            new FakeAnalysisFailureInfoProvider(),
-            new FakeAnalysisTestResultInfoProvider());
-
-    ImmutableMap.Builder<String, Object> envBuilder = ImmutableMap.builder();
-
-    envBuilder.putAll(Starlark.UNIVERSE);
+          @Override
+          public String getName() {
+            return "depset";
+          }
+        });
 
     // Declare a fake implementation of select that just returns the first
     // value in the dict. (This program is forbidden from depending on the real
     // implementation of 'select' in lib.packages, and so the hacks multiply.)
-    envBuilder.put(
+    env.put(
         "select",
         new StarlarkCallable() {
           @Override
@@ -623,45 +490,19 @@ public class SkydocMain {
             return "select";
           }
         });
-
-    topLevelBootstrap.addBindingsToBuilder(envBuilder);
-    androidBootstrap.addBindingsToBuilder(envBuilder);
-    appleBootstrap.addBindingsToBuilder(envBuilder);
-    ccBootstrap.addBindingsToBuilder(envBuilder);
-    configBootstrap.addBindingsToBuilder(envBuilder);
-    javaBootstrap.addBindingsToBuilder(envBuilder);
-    platformBootstrap.addBindingsToBuilder(envBuilder);
-    protoBootstrap.addBindingsToBuilder(envBuilder);
-    pyBootstrap.addBindingsToBuilder(envBuilder);
-    repositoryBootstrap.addBindingsToBuilder(envBuilder);
-    testingBootstrap.addBindingsToBuilder(envBuilder);
-    addNonBootstrapGlobals(envBuilder);
-
-    return Module.createForBuiltins(envBuilder.build());
   }
 
   // TODO(cparsons): Remove this constant by migrating the contained symbols to bootstraps.
   private static final String[] nonBootstrapGlobals = {
     "android_data",
     AndroidDex2OatInfoApi.NAME,
-    AndroidManifestInfoApi.NAME,
-    AndroidAssetsInfoApi.NAME,
-    AndroidLibraryAarInfoApi.NAME,
-    AndroidProguardInfoApi.NAME,
-    AndroidIdlProviderApi.NAME,
-    AndroidIdeInfoProviderApi.NAME,
-    AndroidPreDexJarProviderApi.NAME,
     UsesDataBindingProviderApi.NAME,
-    AndroidCcLinkParamsProviderApi.NAME,
-    AndroidLibraryResourceClassJarProviderApi.NAME,
-    AndroidSdkProviderApi.NAME,
-    AndroidFeatureFlagSetProviderApi.NAME,
-    ProguardMappingProviderApi.NAME,
     GeneratedExtensionRegistryProviderApi.NAME,
-    AndroidBinaryDataInfoApi.NAME,
+    JavaNativeLibraryInfoApi.NAME,
     JsModuleInfoApi.NAME,
     "JsInfo",
-    "PintoModuleProvider"
+    "js_common",
+    "pkg_common",
   };
 
   /**
@@ -673,18 +514,6 @@ public class SkydocMain {
     for (String global : nonBootstrapGlobals) {
       envBuilder.put(global, global);
     }
-  }
-
-  private static StarlarkThread createStarlarkThread(
-      StarlarkSemantics semantics,
-      Module globals,
-      Map<String, Extension> imports) {
-    // We use the default print handler, which writes to stderr.
-    return StarlarkThread.builder(Mutability.create("Skydoc"))
-        .setSemantics(semantics)
-        .setGlobals(globals)
-        .setImportedExtensions(imports)
-        .build();
   }
 
   /** Exception thrown when Starlark evaluation fails (due to malformed Starlark). */

@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.util.MockProtoSupport;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.util.Pair;
@@ -270,7 +271,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         ")");
     ConfiguredTarget protoTarget = getConfiguredTarget("//third_party/x/foo:nodeps");
     ProtoInfo sourcesProvider = protoTarget.get(ProtoInfo.PROVIDER);
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
 
     assertThat(sourcesProvider.getTransitiveProtoSourceRoots().toList())
         .containsExactly(genfiles + "/third_party/x/foo/_virtual_imports/nodeps");
@@ -299,7 +300,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         ")");
     ConfiguredTarget protoTarget = getConfiguredTarget("//third_party/x/foo:withdeps");
     ProtoInfo sourcesProvider = protoTarget.get(ProtoInfo.PROVIDER);
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(sourcesProvider.getTransitiveProtoSourceRoots().toList())
         .containsExactly(
             genfiles + "/third_party/x/foo/_virtual_imports/dep",
@@ -340,7 +341,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         ")");
     ConfiguredTarget protoTarget = getConfiguredTarget("//third_party/x/foo:withdeps");
     ProtoInfo sourcesProvider = protoTarget.get(ProtoInfo.PROVIDER);
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(sourcesProvider.getTransitiveProtoSourceRoots().toList())
         .containsExactly(
             genfiles + "/third_party/x/foo/_virtual_imports/withdeps",
@@ -358,7 +359,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     invalidatePackages();
 
     if (siblingRepoLayout) {
-      setSkylarkSemanticsOptions("--experimental_sibling_repository_layout");
+      setBuildLanguageOptions("--experimental_sibling_repository_layout");
     }
 
     scratch.file("/foo/WORKSPACE");
@@ -373,7 +374,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         TestConstants.LOAD_PROTO_LIBRARY,
         "proto_library(name='a', srcs=['a.proto'], deps=['@foo//x:x'])");
 
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     ConfiguredTarget a = getConfiguredTarget("//a:a");
     ProtoInfo aInfo = a.get(ProtoInfo.PROVIDER);
     assertThat(aInfo.getTransitiveProtoSourceRoots().toList())
@@ -391,7 +392,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
   }
 
   @Test
-  public void test_siblingRepoLayout_ExternalRepoWithGeneratedProto() throws Exception {
+  public void test_siblingRepoLayout_externalRepoWithGeneratedProto() throws Exception {
     testExternalRepoWithGeneratedProto(/*siblingRepoLayout=*/ true);
   }
 
@@ -449,7 +450,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     // exported proto source roots should be the source root of the rule and the direct source roots
     // of its exports and nothing else (not the exports of its exports or the deps of its exports
     // or the exports of its deps)
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(c.get(ProtoInfo.PROVIDER).getExportedProtoSourceRoots().toList())
         .containsExactly(genfiles + "/a/_virtual_imports/a", genfiles + "/c/_virtual_imports/c");
   }
@@ -464,7 +465,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     invalidatePackages();
 
     if (siblingRepoLayout) {
-      setSkylarkSemanticsOptions("--experimental_sibling_repository_layout");
+      setBuildLanguageOptions("--experimental_sibling_repository_layout");
     }
 
     scratch.file("/yolo_repo/WORKSPACE");
@@ -518,7 +519,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     invalidatePackages();
 
     if (siblingRepoLayout) {
-      setSkylarkSemanticsOptions("--experimental_sibling_repository_layout");
+      setBuildLanguageOptions("--experimental_sibling_repository_layout");
     }
 
     scratch.file("/yolo_repo/WORKSPACE");
@@ -573,7 +574,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     invalidatePackages();
 
     if (siblingRepoLayout) {
-      setSkylarkSemanticsOptions("--experimental_sibling_repository_layout");
+      setBuildLanguageOptions("--experimental_sibling_repository_layout");
     }
 
     scratch.file("/yolo_repo/WORKSPACE");
@@ -627,7 +628,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     invalidatePackages();
 
     if (siblingRepoLayout) {
-      setSkylarkSemanticsOptions("--experimental_sibling_repository_layout");
+      setBuildLanguageOptions("--experimental_sibling_repository_layout");
     }
 
     scratch.file("/yolo_repo/WORKSPACE");
@@ -719,7 +720,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
 
     Iterable<String> commandLine =
         paramFileArgsForAction(getDescriptorWriteAction("//third_party/a/b:d"));
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(commandLine)
         .contains("-Id.proto=" + genfiles + "/third_party/a/b/_virtual_imports/d/d.proto");
   }
@@ -737,7 +738,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
 
     Iterable<String> commandLine =
         paramFileArgsForAction(getDescriptorWriteAction("//third_party/a/b:d"));
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(commandLine)
         .contains("-Ib/c/d.proto=" + genfiles + "/third_party/a/b/_virtual_imports/d/b/c/d.proto");
   }
@@ -758,7 +759,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         "    strip_import_prefix = 'c')");
 
     Iterable<String> commandLine = paramFileArgsForAction(getDescriptorWriteAction("//a/b:d"));
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(commandLine)
         .contains("-Ifoo/d.proto=" + genfiles + "/a/b/_virtual_imports/d/foo/d.proto");
   }
@@ -778,7 +779,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         "    import_prefix = 'foo')");
 
     Iterable<String> commandLine = paramFileArgsForAction(getDescriptorWriteAction("//a/b:d"));
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(commandLine)
         .contains("-Ifoo/a/b/c/d.proto=" + genfiles + "/a/b/_virtual_imports/d/foo/a/b/c/d.proto");
   }
@@ -945,7 +946,7 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
         "proto_library(name='a', srcs=['a.proto'], deps=['@foo//x/y:q'])");
 
     Iterable<String> commandLine = paramFileArgsForAction(getDescriptorWriteAction("//a:a"));
-    String genfiles = getTargetConfiguration().getGenfilesFragment().toString();
+    String genfiles = getTargetConfiguration().getGenfilesFragment(RepositoryName.MAIN).toString();
     assertThat(commandLine)
         .contains("-Iy/z/q.proto=" + genfiles + "/external/foo/x/y/_virtual_imports/q/y/z/q.proto");
   }
@@ -1002,5 +1003,42 @@ public class BazelProtoLibraryTest extends BuildViewTestCase {
     scratch.file("a/BUILD", "proto_library(", "    name = 'a',", "    srcs = ['a.proto'],", ")");
 
     getConfiguredTarget("//a");
+  }
+
+  @Test
+  public void testNoExperimentalProtoDescriptorSetsIncludeSourceInfo() throws Exception {
+    if (!isThisBazel()) {
+      return;
+    }
+
+    scratch.file(
+        "x/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
+        "proto_library(",
+        "    name = 'a_proto',",
+        "    srcs = ['a.proto'],",
+        ")");
+
+    Iterable<String> commandLine = paramFileArgsForAction(getDescriptorWriteAction("//x:a_proto"));
+    assertThat(commandLine).doesNotContain("--include_source_info");
+  }
+
+  @Test
+  public void testExperimentalProtoDescriptorSetsIncludeSourceInfo() throws Exception {
+    if (!isThisBazel()) {
+      return;
+    }
+
+    useConfiguration("--experimental_proto_descriptor_sets_include_source_info");
+    scratch.file(
+        "x/BUILD",
+        TestConstants.LOAD_PROTO_LIBRARY,
+        "proto_library(",
+        "    name = 'a_proto',",
+        "    srcs = ['a.proto'],",
+        ")");
+
+    Iterable<String> commandLine = paramFileArgsForAction(getDescriptorWriteAction("//x:a_proto"));
+    assertThat(commandLine).contains("--include_source_info");
   }
 }

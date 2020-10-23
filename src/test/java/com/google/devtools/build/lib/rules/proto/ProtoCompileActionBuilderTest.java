@@ -17,7 +17,7 @@ package com.google.devtools.build.lib.rules.proto;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.collect.nestedset.Order.STABLE_ORDER;
 import static com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.createCommandLineFromToolchains;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.mock;
 
 import com.google.common.collect.ImmutableList;
@@ -32,16 +32,17 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.Deps;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.Exports;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.Services;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.ToolchainInvocation;
 import com.google.devtools.build.lib.util.LazyString;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import javax.annotation.Nullable;
+import net.starlark.java.syntax.Location;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -50,11 +51,12 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class ProtoCompileActionBuilderTest {
 
-  private static final InMemoryFileSystem FILE_SYSTEM = new InMemoryFileSystem();
+  private static final InMemoryFileSystem FILE_SYSTEM =
+      new InMemoryFileSystem(DigestHashFunction.SHA256);
   private final ArtifactRoot root =
       ArtifactRoot.asSourceRoot(Root.fromPath(FILE_SYSTEM.getPath("/")));
   private final ArtifactRoot derivedRoot =
-      ArtifactRoot.asDerivedRoot(FILE_SYSTEM.getPath("/"), FILE_SYSTEM.getPath("/out"));
+      ArtifactRoot.asDerivedRoot(FILE_SYSTEM.getPath("/"), "out");
 
   private ProtoInfo protoInfo(
       ImmutableList<Artifact> directProtos,

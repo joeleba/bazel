@@ -24,13 +24,13 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider.OutputJar;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkbuildapi.java.JavaRuleOutputJarsProviderApi;
-import com.google.devtools.build.lib.skylarkbuildapi.java.OutputJarApi;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.StarlarkList;
+import com.google.devtools.build.lib.starlarkbuildapi.java.JavaRuleOutputJarsProviderApi;
+import com.google.devtools.build.lib.starlarkbuildapi.java.OutputJarApi;
 import java.util.Collection;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkList;
 
 /** Provides information about jar files produced by a Java rule. */
 @Immutable
@@ -62,6 +62,11 @@ public final class JavaRuleOutputJarsProvider
       this.srcJars = ImmutableList.copyOf(srcJars);
     }
 
+    @Override
+    public boolean isImmutable() {
+      return true; // immutable and Starlark-hashable
+    }
+
     @Nullable
     @Override
     public Artifact getClassJar() {
@@ -88,7 +93,7 @@ public final class JavaRuleOutputJarsProvider
 
     @Nullable
     @Override
-    public Sequence<Artifact> getSrcJarsSkylark() {
+    public Sequence<Artifact> getSrcJarsStarlark() {
       return StarlarkList.immutableCopyOf(srcJars);
     }
 
@@ -121,6 +126,11 @@ public final class JavaRuleOutputJarsProvider
       return EMPTY;
     }
     return new JavaRuleOutputJarsProvider(outputJars, jdeps, nativeHeaders);
+  }
+
+  @Override
+  public boolean isImmutable() {
+    return true; // immutable and Starlark-hashable
   }
 
   @Override

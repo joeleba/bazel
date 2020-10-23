@@ -44,6 +44,7 @@ public class DownloadManager {
 
   private final RepositoryCache repositoryCache;
   private List<Path> distdir = ImmutableList.of();
+  private UrlRewriter rewriter;
   private final Downloader downloader;
 
   public DownloadManager(RepositoryCache repositoryCache, Downloader downloader) {
@@ -53,6 +54,10 @@ public class DownloadManager {
 
   public void setDistdir(List<Path> distdir) {
     this.distdir = ImmutableList.copyOf(distdir);
+  }
+
+  public void setUrlRewriter(UrlRewriter rewriter) {
+    this.rewriter = rewriter;
   }
 
   /**
@@ -87,6 +92,10 @@ public class DownloadManager {
       throws IOException, InterruptedException {
     if (Thread.interrupted()) {
       throw new InterruptedException();
+    }
+
+    if (rewriter != null) {
+      urls = rewriter.amend(urls);
     }
 
     URL mainUrl; // The "main" URL for this request
@@ -148,7 +157,7 @@ public class DownloadManager {
           // This is not a warning (and probably we even should drop the message); it is
           // perfectly fine to have a common rc-file pointing to a volume that is sometimes,
           // but not always mounted.
-          eventHandler.handle(Event.info("non-existent distir " + dir));
+          eventHandler.handle(Event.info("non-existent distdir " + dir));
         } else if (!dir.isDirectory()) {
           eventHandler.handle(Event.warn("distdir " + dir + " is not a directory"));
         } else {
@@ -187,7 +196,7 @@ public class DownloadManager {
 
     try {
       downloader.download(
-          urls, authHeaders, checksum, destination, eventHandler, clientEnv);
+          urls, authHeaders, checksum, canonicalId, destination, eventHandler, clientEnv, type);
     } catch (InterruptedIOException e) {
       throw new InterruptedException(e.getMessage());
     }

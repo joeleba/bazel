@@ -446,7 +446,7 @@ public class ActionGraphProtoOutputFormatterCallbackTest extends ActionGraphQuer
         "    outputs = [ctx.outputs.outfile],",
         "    executable = 'dummy',",
         "    arguments = ['--non-param-file-flag', args],",
-        "    mnemonic = 'SkylarkAction'",
+        "    mnemonic = 'StarlarkAction'",
         "  )",
         "test_rule = rule(",
         "  implementation = _impl,",
@@ -522,7 +522,7 @@ public class ActionGraphProtoOutputFormatterCallbackTest extends ActionGraphQuer
   }
 
   @Test
-  public void testIncludeAspects_AspectOnAspect() throws Exception {
+  public void testIncludeAspects_aspectOnAspect() throws Exception {
     options.useAspects = true;
     writeFile(
         "test/rule.bzl",
@@ -638,7 +638,7 @@ public class ActionGraphProtoOutputFormatterCallbackTest extends ActionGraphQuer
   }
 
   @Test
-  public void testIncludeAspects_SingleAspect() throws Exception {
+  public void testIncludeAspects_singleAspect() throws Exception {
     options.useAspects = true;
     writeFile(
         "test/rule.bzl",
@@ -834,7 +834,7 @@ public class ActionGraphProtoOutputFormatterCallbackTest extends ActionGraphQuer
   }
 
   @Test
-  public void testIncludeAspects_flagDisabled_NoAspect() throws Exception {
+  public void testIncludeAspects_flagDisabled_noAspect() throws Exception {
     // The flag --include_aspects is set to false by default.
     writeFile(
         "test/rule.bzl",

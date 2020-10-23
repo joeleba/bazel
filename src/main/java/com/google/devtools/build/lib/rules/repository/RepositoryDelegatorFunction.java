@@ -18,12 +18,12 @@ package com.google.devtools.build.lib.rules.repository;
 import static com.google.devtools.build.lib.rules.repository.RepositoryDirectoryDirtinessChecker.managedDirectoriesExist;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
@@ -31,11 +31,11 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler.FetchProgress;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleFormatter;
 import com.google.devtools.build.lib.repository.ExternalPackageException;
-import com.google.devtools.build.lib.repository.ExternalPackageUtil;
+import com.google.devtools.build.lib.repository.ExternalPackageHelper;
 import com.google.devtools.build.lib.repository.ExternalRuleNotFoundException;
 import com.google.devtools.build.lib.repository.RepositoryFailedEvent;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
-import com.google.devtools.build.lib.skyframe.PrecomputedValue;
+import com.google.devtools.build.lib.skyframe.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -43,7 +43,6 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -52,6 +51,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,24 +68,22 @@ import javax.annotation.Nullable;
  */
 public final class RepositoryDelegatorFunction implements SkyFunction {
   public static final Precomputed<Map<RepositoryName, PathFragment>> REPOSITORY_OVERRIDES =
-      new Precomputed<>(PrecomputedValue.Key.create("repository_overrides"));
+      new Precomputed<>("repository_overrides");
 
   public static final Precomputed<String> DEPENDENCY_FOR_UNCONDITIONAL_FETCHING =
-      new Precomputed<>(
-          PrecomputedValue.Key.create("dependency_for_unconditional_repository_fetching"));
+      new Precomputed<>("dependency_for_unconditional_repository_fetching");
 
   public static final Precomputed<String> DEPENDENCY_FOR_UNCONDITIONAL_CONFIGURING =
-      new Precomputed<>(PrecomputedValue.Key.create("dependency_for_unconditional_configuring"));
+      new Precomputed<>("dependency_for_unconditional_configuring");
 
   public static final Precomputed<Optional<RootedPath>> RESOLVED_FILE_FOR_VERIFICATION =
-      new Precomputed<>(
-          PrecomputedValue.Key.create("resolved_file_for_external_repository_verification"));
+      new Precomputed<>("resolved_file_for_external_repository_verification");
 
   public static final Precomputed<Set<String>> OUTPUT_VERIFICATION_REPOSITORY_RULES =
-      new Precomputed<>(PrecomputedValue.Key.create("output_verification_repository_rules"));
+      new Precomputed<>("output_verification_repository_rules");
 
   public static final Precomputed<Optional<RootedPath>> RESOLVED_FILE_INSTEAD_OF_WORKSPACE =
-      new Precomputed<>(PrecomputedValue.Key.create("resolved_file_instead_of_workspace"));
+      new Precomputed<>("resolved_file_instead_of_workspace");
 
   public static final String DONT_FETCH_UNCONDITIONALLY = "";
 
@@ -96,8 +94,8 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
   // Mapping of rule class name to RepositoryFunction.
   private final ImmutableMap<String, RepositoryFunction> handlers;
 
-  // Delegate function to handle skylark remote repositories
-  private final RepositoryFunction skylarkHandler;
+  // Delegate function to handle Starlark remote repositories
+  private final RepositoryFunction starlarkHandler;
 
   // This is a reference to isFetch in BazelRepositoryModule, which tracks whether the current
   // command is a fetch. Remote repository lookups are only allowed during fetches.
@@ -108,21 +106,73 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
   // before each command.
   private final ManagedDirectoriesKnowledge managedDirectoriesKnowledge;
 
+  private final ExternalPackageHelper externalPackageHelper;
+
   private final Supplier<Map<String, String>> clientEnvironmentSupplier;
 
   public RepositoryDelegatorFunction(
       ImmutableMap<String, RepositoryFunction> handlers,
-      @Nullable RepositoryFunction skylarkHandler,
+      @Nullable RepositoryFunction starlarkHandler,
       AtomicBoolean isFetch,
       Supplier<Map<String, String>> clientEnvironmentSupplier,
       BlazeDirectories directories,
-      ManagedDirectoriesKnowledge managedDirectoriesKnowledge) {
+      ManagedDirectoriesKnowledge managedDirectoriesKnowledge,
+      ExternalPackageHelper externalPackageHelper) {
     this.handlers = handlers;
-    this.skylarkHandler = skylarkHandler;
+    this.starlarkHandler = starlarkHandler;
     this.isFetch = isFetch;
     this.clientEnvironmentSupplier = clientEnvironmentSupplier;
     this.directories = directories;
     this.managedDirectoriesKnowledge = managedDirectoriesKnowledge;
+    this.externalPackageHelper = externalPackageHelper;
+  }
+
+  public static RepositoryDirectoryValue.Builder symlink(
+      Path source, PathFragment destination, String userDefinedPath, Environment env)
+      throws RepositoryFunctionException, InterruptedException {
+    try {
+      source.createSymbolicLink(destination);
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(
+          new IOException(
+              String.format(
+                  "Could not create symlink to repository \"%s\" (absolute path: \"%s\"): %s",
+                  userDefinedPath, destination, e.getMessage()),
+              e),
+          Transience.TRANSIENT);
+    }
+    FileValue repositoryValue = RepositoryFunction.getRepositoryDirectory(source, env);
+    if (repositoryValue == null) {
+      // TODO(bazel-team): If this returns null, we unnecessarily recreate the symlink above on the
+      // second execution.
+      return null;
+    }
+
+    if (!repositoryValue.isDirectory()) {
+      throw new RepositoryFunctionException(
+          new IOException(
+              String.format(
+                  "The repository's path is \"%s\" (absolute: \"%s\") "
+                      + "but this directory does not exist.",
+                  userDefinedPath, destination)),
+          Transience.PERSISTENT);
+    }
+
+    // Check that the repository contains a WORKSPACE file.
+    // It's important to check the real path, otherwise this looks under the "external/[repo]" path
+    // and cause a Skyframe cycle in the lookup.
+    FileValue workspaceFileValue =
+        LocalRepositoryFunction.getWorkspaceFile(repositoryValue.realRootedPath(), env);
+    if (workspaceFileValue == null) {
+      return null;
+    }
+
+    if (!workspaceFileValue.exists()) {
+      throw new RepositoryFunctionException(
+          new IOException("No WORKSPACE file found in " + source), Transience.PERSISTENT);
+    }
+
+    return RepositoryDirectoryValue.builder().setPath(source);
   }
 
   private void setupRepositoryRoot(Path repoRoot) throws RepositoryFunctionException {
@@ -136,7 +186,7 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
 
   @Override
   public SkyValue compute(SkyKey skyKey, Environment env)
-      throws SkyFunctionException, InterruptedException {
+      throws InterruptedException, RepositoryFunctionException {
     RepositoryName repositoryName = (RepositoryName) skyKey.argument();
 
     Map<RepositoryName, PathFragment> overrides = REPOSITORY_OVERRIDES.get(env);
@@ -156,11 +206,11 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     Rule rule;
     try {
       rule = getRepository(repositoryName, env);
-    } catch (ExternalRuleNotFoundException e) {
+      if (rule == null) {
+        return null;
+      }
+    } catch (NoSuchRepositoryException e) {
       return RepositoryDirectoryValue.NO_SUCH_REPOSITORY_VALUE;
-    }
-    if (rule == null) {
-      return null;
     }
 
     RepositoryFunction handler = getHandler(rule);
@@ -267,8 +317,8 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
 
   private RepositoryFunction getHandler(Rule rule) {
     RepositoryFunction handler;
-    if (rule.getRuleClassObject().isSkylark()) {
-      handler = skylarkHandler;
+    if (rule.getRuleClassObject().isStarlark()) {
+      handler = starlarkHandler;
     } else {
       handler = handlers.get(rule.getRuleClass());
     }
@@ -286,7 +336,7 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
       Map<String, String> markerData,
       RepositoryFunction handler,
       Rule rule)
-      throws SkyFunctionException, InterruptedException {
+      throws InterruptedException, RepositoryFunctionException {
 
     setupRepositoryRoot(repoRoot);
 
@@ -296,7 +346,7 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     RepositoryDirectoryValue.Builder repoBuilder;
     try {
       repoBuilder = handler.fetch(rule, repoRoot, directories, env, markerData, skyKey);
-    } catch (SkyFunctionException e) {
+    } catch (RepositoryFunctionException e) {
       // Upon an exceptional exit, the fetching of that repository is over as well.
       env.getListener().post(new RepositoryFetching(repositoryName, true));
       env.getListener().post(new RepositoryFailedEvent(repositoryName, e.getMessage()));
@@ -317,11 +367,20 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
    * returns null.
    */
   @Nullable
-  private static Rule getRepository(
-      RepositoryName repositoryName, Environment env)
-      throws ExternalPackageException, InterruptedException {
-    return ExternalPackageUtil.getRuleByName(repositoryName.strippedName(), env);
+  private Rule getRepository(RepositoryName repositoryName, Environment env)
+      throws InterruptedException, RepositoryFunctionException, NoSuchRepositoryException {
+    try {
+      return externalPackageHelper.getRuleByName(repositoryName.strippedName(), env);
+    } catch (ExternalRuleNotFoundException e) {
+      // This is caught and handled immediately in compute().
+      throw new NoSuchRepositoryException();
+    } catch (ExternalPackageException e) {
+      throw new RepositoryFunctionException(e);
+    }
   }
+
+  /** Marker exception for the case where a repository is not defined. */
+  private static final class NoSuchRepositoryException extends Exception {}
 
   @Override
   public String extractTag(SkyKey skyKey) {
@@ -332,8 +391,7 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
       PathFragment sourcePath, Environment env, Path repoRoot, String pathAttr)
       throws RepositoryFunctionException, InterruptedException {
     setupRepositoryRoot(repoRoot);
-    RepositoryDirectoryValue.Builder directoryValue =
-        LocalRepositoryFunction.symlink(repoRoot, sourcePath, pathAttr, env);
+    RepositoryDirectoryValue.Builder directoryValue = symlink(repoRoot, sourcePath, pathAttr, env);
     if (directoryValue == null) {
       return null;
     }
@@ -515,7 +573,7 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     }
   }
 
-  private class RepositoryFetching implements FetchProgress {
+  private static class RepositoryFetching implements FetchProgress {
     final String id;
     final boolean finished;
     final String message;

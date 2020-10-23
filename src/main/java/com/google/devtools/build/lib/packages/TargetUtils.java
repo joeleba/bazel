@@ -22,10 +22,8 @@ import com.google.common.base.Predicate;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.Pair;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -33,6 +31,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.syntax.Location;
 
 /**
  * Utility functions over Targets that don't really belong in the base {@link
@@ -53,8 +54,9 @@ public final class TargetUtils {
         || tag.startsWith("no-")
         || tag.startsWith("supports-")
         || tag.startsWith("disable-")
-        || tag.equals("local")
-        || tag.startsWith("cpu:");
+        || tag.startsWith("cpu:")
+        || tag.equals(ExecutionRequirements.LOCAL)
+        || tag.equals(ExecutionRequirements.WORKER_KEY_MNEMONIC);
   }
 
   private TargetUtils() {} // Uninstantiable.
@@ -89,7 +91,7 @@ public final class TargetUtils {
     }
 
     Rule rule = (Rule) target;
-    return !rule.getRuleClassObject().isSkylark() && rule.getRuleClass().equals("alias");
+    return !rule.getRuleClassObject().isStarlark() && rule.getRuleClass().equals("alias");
   }
 
   /**
@@ -130,14 +132,6 @@ public final class TargetUtils {
   public static boolean isLocalTestRule(Rule rule) {
     return hasConstraint(rule, "local")
         || NonconfigurableAttributeMapper.of(rule).get("local", Type.BOOLEAN);
-  }
-
-  /**
-   * Returns true if the rule is a test or test suite and is local or exclusive.
-   * Wraps the above calls into one generic check safely applicable to any rule.
-   */
-  public static boolean isTestRuleAndRunsLocally(Rule rule) {
-    return isTestOrTestSuiteRule(rule) && (isLocalTestRule(rule) || isExclusiveTestRule(rule));
   }
 
   /**
@@ -210,7 +204,7 @@ public final class TargetUtils {
       return null;
     }
     Rule rule = (Rule) target;
-    return (rule.isAttrDefined("deprecation", Type.STRING))
+    return rule.isAttrDefined("deprecation", Type.STRING)
         ? NonconfigurableAttributeMapper.of(rule).get("deprecation", Type.STRING)
         : null;
   }
@@ -250,7 +244,7 @@ public final class TargetUtils {
    * @param rule a rule instance to get tags from
    * @param allowTagsPropagation if set to true, tags will be propagated from a target to the
    *     actions' execution requirements, for more details {@see
-   *     SkylarkSematicOptions#experimentalAllowTagsPropagation}
+   *     BuildLanguageOptions#experimentalAllowTagsPropagation}
    */
   public static ImmutableMap<String, String> getExecutionInfo(
       Rule rule, boolean allowTagsPropagation) {
@@ -267,23 +261,24 @@ public final class TargetUtils {
    * #legalExecInfoKeys}.
    *
    * @param executionRequirementsUnchecked execution_requirements of a rule, expected to be of a
-   *     {@code Dict<String, String>} type, null or {@link
-   *     com.google.devtools.build.lib.syntax.Runtime#NONE}
+   *     {@code Dict<String, String>} type, null or Starlark None.
    * @param rule a rule instance to get tags from
    * @param allowTagsPropagation if set to true, tags will be propagated from a target to the
    *     actions' execution requirements, for more details {@see
-   *     SkylarkSematicOptions#experimentalAllowTagsPropagation}
+   *     StarlarkSematicOptions#experimentalAllowTagsPropagation}
    */
   public static ImmutableMap<String, String> getFilteredExecutionInfo(
-      Object executionRequirementsUnchecked, Rule rule, boolean allowTagsPropagation)
+      @Nullable Object executionRequirementsUnchecked, Rule rule, boolean allowTagsPropagation)
       throws EvalException {
     Map<String, String> checkedExecutionRequirements =
         TargetUtils.filter(
-            Dict.castSkylarkDictOrNoneToDict(
-                executionRequirementsUnchecked,
-                String.class,
-                String.class,
-                "execution_requirements"));
+            executionRequirementsUnchecked == null
+                ? ImmutableMap.of()
+                : Dict.noneableCast(
+                    executionRequirementsUnchecked,
+                    String.class,
+                    String.class,
+                    "execution_requirements"));
 
     Map<String, String> executionInfoBuilder = new HashMap<>();
     // adding filtered execution requirements to the execution info map

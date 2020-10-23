@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.BoolOrEnumConverter;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Converters.CommaSeparatedNonEmptyOptionListConverter;
+import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
@@ -62,13 +63,13 @@ public class ExecutionOptions extends OptionsBase {
       name = "spawn_strategy",
       defaultValue = "",
       converter = CommaSeparatedNonEmptyOptionListConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
       help =
           "Specify how spawn actions are executed by default. Accepts a comma-separated list of"
               + " strategies from highest to lowest priority. For each action Bazel picks the"
               + " strategy with the highest priority that can execute the action. The default"
-              + " value is \"remote,worker,sandboxed,local\".See"
+              + " value is \"remote,worker,sandboxed,local\". See"
               + " https://blog.bazel.build/2019/06/19/list-strategy.html for details.")
   public List<String> spawnStrategy;
 
@@ -76,8 +77,8 @@ public class ExecutionOptions extends OptionsBase {
       name = "genrule_strategy",
       defaultValue = "",
       converter = CommaSeparatedNonEmptyOptionListConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
       help =
           "Specify how to execute genrules. This flag will be phased out. Instead, use "
               + "--spawn_strategy=<value> to control all actions or --strategy=Genrule=<value> "
@@ -88,14 +89,14 @@ public class ExecutionOptions extends OptionsBase {
       name = "strategy",
       allowMultiple = true,
       converter = Converters.StringToStringListConverter.class,
-      defaultValue = "",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
       help =
           "Specify how to distribute compilation of other spawn actions. Accepts a comma-separated"
               + " list of strategies from highest to lowest priority. For each action Bazel picks"
               + " the strategy with the highest priority that can execute the action. The default"
-              + " value is \"remote,worker,sandboxed,local\".See"
+              + " value is \"remote,worker,sandboxed,local\". See"
               + " https://blog.bazel.build/2019/06/19/list-strategy.html for details.")
   public List<Map.Entry<String, List<String>>> strategy;
 
@@ -103,9 +104,9 @@ public class ExecutionOptions extends OptionsBase {
       name = "strategy_regexp",
       allowMultiple = true,
       converter = RegexFilterAssignmentConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      defaultValue = "null",
       help =
           "Override which spawn strategy should be used to execute spawn actions that have "
               + "descriptions matching a certain regex_filter. See --per_file_copt for details on"
@@ -122,180 +123,175 @@ public class ExecutionOptions extends OptionsBase {
   @Option(
       name = "materialize_param_files",
       defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.EXECUTION},
       help =
           "Writes intermediate parameter files to output tree even when using "
               + "remote action execution. Useful when debugging actions. "
-              + "This is implied by --subcommands.")
+              + "This is implied by --subcommands and --verbose_failures.")
   public boolean materializeParamFiles;
 
   @Option(
       name = "experimental_materialize_param_files_directly",
       defaultValue = "false",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.EXECUTION},
       help = "If materializing param files, do so with direct writes to disk.")
   public boolean materializeParamFilesDirectly;
 
   public boolean shouldMaterializeParamFiles() {
-    // Implied by --subcommands
-    return materializeParamFiles || showSubcommands != ActionExecutionContext.ShowSubcommands.FALSE;
+    // Implied by --subcommands and --verbose_failures
+    return materializeParamFiles
+        || showSubcommands != ActionExecutionContext.ShowSubcommands.FALSE
+        || verboseFailures;
   }
 
   @Option(
-    name = "verbose_failures",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "If a command fails, print out the full command line."
-  )
+      name = "verbose_failures",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+      help = "If a command fails, print out the full command line.")
   public boolean verboseFailures;
 
   @Option(
-    name = "subcommands",
-    abbrev = 's',
-    defaultValue = "false",
-    converter = ShowSubcommandsConverter.class,
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "Display the subcommands executed during a build."
-  )
+      name = "subcommands",
+      abbrev = 's',
+      defaultValue = "false",
+      converter = ShowSubcommandsConverter.class,
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+      help = "Display the subcommands executed during a build.")
   public ShowSubcommands showSubcommands;
 
   @Option(
-    name = "check_up_to_date",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Don't perform the build, just check if it is up-to-date.  If all targets are "
-            + "up-to-date, the build completes successfully.  If any step needs to be executed "
-            + "an error is reported and the build fails."
-  )
+      name = "check_up_to_date",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "Don't perform the build, just check if it is up-to-date.  If all targets are "
+              + "up-to-date, the build completes successfully.  If any step needs to be executed "
+              + "an error is reported and the build fails.")
   public boolean checkUpToDate;
 
   @Option(
-    name = "check_tests_up_to_date",
-    defaultValue = "false",
-    implicitRequirements = {"--check_up_to_date"},
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Don't run tests, just check if they are up-to-date.  If all tests results are "
-            + "up-to-date, the testing completes successfully.  If any test needs to be built or "
-            + "executed, an error is reported and the testing fails.  This option implies "
-            + "--check_up_to_date behavior."
-  )
+      name = "check_tests_up_to_date",
+      defaultValue = "false",
+      implicitRequirements = {"--check_up_to_date"},
+      documentationCategory = OptionDocumentationCategory.TESTING,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "Don't run tests, just check if they are up-to-date.  If all tests results are "
+              + "up-to-date, the testing completes successfully.  If any test needs to be built or "
+              + "executed, an error is reported and the testing fails.  This option implies "
+              + "--check_up_to_date behavior.")
   public boolean testCheckUpToDate;
 
   @Option(
-    name = "test_strategy",
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "Specifies which strategy to use when running tests."
-  )
+      name = "test_strategy",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.TESTING,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help = "Specifies which strategy to use when running tests.")
   public String testStrategy;
 
   @Option(
-    name = "test_keep_going",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "When disabled, any non-passing test will cause the entire build to stop. By default "
-            + "all tests are run, even if some do not pass."
-  )
+      name = "test_keep_going",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.TESTING,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "When disabled, any non-passing test will cause the entire build to stop. By default "
+              + "all tests are run, even if some do not pass.")
   public boolean testKeepGoing;
 
   @Option(
-    name = "flaky_test_attempts",
-    allowMultiple = true,
-    defaultValue = "default",
-    converter = TestAttemptsConverter.class,
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Each test will be retried up to the specified number of times in case of any test "
-            + "failure. Tests that required more than one attempt to pass would be marked as "
-            + "'FLAKY' in the test summary. If this option is set, it should specify an int N or "
-            + "the string 'default'. If it's an int, then all tests will be run up to N times. "
-            + "If it is not specified or its value is 'default', then only a single test attempt "
-            + "will be made for regular tests and three for tests marked explicitly as flaky by "
-            + "their rule (flaky=1 attribute)."
-  )
+      name = "flaky_test_attempts",
+      allowMultiple = true,
+      defaultValue = "default",
+      converter = TestAttemptsConverter.class,
+      documentationCategory = OptionDocumentationCategory.TESTING,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "Each test will be retried up to the specified number of times in case of any test"
+              + " failure. Tests that required more than one attempt to pass are marked as 'FLAKY'"
+              + " in the test summary. Normally the value specified is just an integer or the"
+              + " string 'default'. If an integer, then all tests will be run up to N times. If"
+              + " 'default', then only a single test attempt will be made for regular tests and"
+              + " three for tests marked explicitly as flaky by their rule (flaky=1 attribute)."
+              + " Alternate syntax: regex_filter@flaky_test_attempts. Where flaky_test_attempts is"
+              + " as above and regex_filter stands for a list of include and exclude regular"
+              + " expression patterns (Also see --runs_per_test). Example:"
+              + " --flaky_test_attempts=//foo/.*,-//foo/bar/.*@3 deflakes all tests in //foo/"
+              + " except those under foo/bar three times. This option can be passed multiple"
+              + " times. The most recently passed argument that matches takes precedence. If"
+              + " nothing matches, behavior is as if 'default' above.")
   public List<PerLabelOptions> testAttempts;
 
   @Option(
       name = "test_tmpdir",
       defaultValue = "null",
       converter = OptionsUtils.PathFragmentConverter.class,
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      documentationCategory = OptionDocumentationCategory.TESTING,
       effectTags = {OptionEffectTag.UNKNOWN},
       help = "Specifies the base temporary directory for 'bazel test' to use.")
   public PathFragment testTmpDir;
 
   @Option(
-    name = "test_output",
-    defaultValue = "summary",
-    converter = TestStrategy.TestOutputFormat.Converter.class,
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Specifies desired output mode. Valid values are 'summary' to output only test status "
-            + "summary, 'errors' to also print test logs for failed tests, 'all' to print logs "
-            + "for all tests and 'streamed' to output logs for all tests in real time "
-            + "(this will force tests to be executed locally one at a time regardless of "
-            + "--test_strategy value)."
-  )
-  public TestStrategy.TestOutputFormat testOutput;
+      name = "test_output",
+      defaultValue = "summary",
+      converter = TestOutputFormat.Converter.class,
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {
+        OptionEffectTag.TEST_RUNNER,
+        OptionEffectTag.TERMINAL_OUTPUT,
+        OptionEffectTag.EXECUTION
+      },
+      help =
+          "Specifies desired output mode. Valid values are 'summary' to output only test status "
+              + "summary, 'errors' to also print test logs for failed tests, 'all' to print logs "
+              + "for all tests and 'streamed' to output logs for all tests in real time "
+              + "(this will force tests to be executed locally one at a time regardless of "
+              + "--test_strategy value).")
+  public TestOutputFormat testOutput;
 
   @Option(
-    name = "test_summary",
-    defaultValue = "short",
-    converter = TestStrategy.TestSummaryFormat.Converter.class,
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help =
-        "Specifies the desired format ot the test summary. Valid values are 'short' to print "
-            + "information only about tests executed, 'terse', to print information only about "
-            + "unsuccessful tests that were run, 'detailed' to print detailed information about "
-            + "failed test cases, and 'none' to omit the summary."
-  )
-  public TestStrategy.TestSummaryFormat testSummary;
+      name = "max_test_output_bytes",
+      defaultValue = "-1",
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {
+        OptionEffectTag.TEST_RUNNER,
+        OptionEffectTag.TERMINAL_OUTPUT,
+        OptionEffectTag.EXECUTION
+      },
+      help =
+          "Specifies maximum per-test-log size that can be emitted when --test_summary is 'errors' "
+              + "or 'all'. Useful for avoiding overwhelming the output with excessively noisy test "
+              + "output. The test header is included in the log size. Negative values imply no "
+              + "limit. Output is all or nothing.")
+  public int maxTestOutputBytes;
 
   @Option(
-    name = "resource_autosense",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "This flag has no effect, and is deprecated"
-  )
-  public boolean useResourceAutoSense;
+      name = "test_summary",
+      defaultValue = "short",
+      converter = TestSummaryFormat.Converter.class,
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+      help =
+          "Specifies the desired format ot the test summary. Valid values are 'short' to print "
+              + "information only about tests executed, 'terse', to print information only about "
+              + "unsuccessful tests that were run, 'detailed' to print detailed information about "
+              + "failed test cases, and 'none' to omit the summary.")
+  public TestSummaryFormat testSummary;
 
   @Option(
-      name = "incompatible_remove_ram_utilization_factor",
+      name = "resource_autosense",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.EXECUTION},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
-      help = "If true, fully deprecates --ram_utilization_factor.")
-  public boolean removeRamUtilizationFactor;
-
-  @Option(
-      name = "ram_utilization_factor",
-      defaultValue = "0",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
-      deprecationWarning =
-          "--ram_utilization_factor will be deprecated. Please use"
-              + " --local_ram_resources=HOST_RAM*<float> instead.",
-      help = "This flag will be deprecated. Please use --local_ram_resources.")
-  public int ramUtilizationPercentage;
+      help = "This flag has no effect, and is deprecated")
+  public boolean useResourceAutoSense;
 
   @Option(
       name = "local_resources",
@@ -306,14 +302,14 @@ public class ExecutionOptions extends OptionsBase {
           "Deprecated by '--incompatible_remove_local_resources'. Please use "
               + "'--local_ram_resources' and '--local_cpu_resources'",
       deprecationWarning =
-          "--local_resources will be deprecated. Please use"
+          "--local_resources is deprecated. Please use"
               + " --local_ram_resources and --local_cpu_resources instead.",
       converter = ResourceSet.ResourceSetConverter.class)
   public ResourceSet availableResources;
 
   @Option(
       name = "incompatible_remove_local_resources",
-      defaultValue = "false",
+      defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
       effectTags = {OptionEffectTag.EXECUTION},
       metadataTags = {
@@ -352,7 +348,7 @@ public class ExecutionOptions extends OptionsBase {
               + "By default, (\"HOST_RAM*.67\"), Bazel will query system configuration to estimate "
               + "amount of RAM available for the locally executed build actions and will use 67% "
               + "of available RAM. "
-              + "Note: This is a no-op if --ram_utilization_factor or --local_resources is set.",
+              + "Note: This is a no-op if --local_resources is set.",
       converter = RamResourceConverter.class)
   public float localRamResources;
 
@@ -374,8 +370,8 @@ public class ExecutionOptions extends OptionsBase {
   @Option(
       name = "local_test_jobs",
       defaultValue = "auto",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.TESTING,
+      effectTags = {OptionEffectTag.EXECUTION},
       help =
           "The max number of local test jobs to run concurrently. "
               + "Takes "
@@ -475,6 +471,38 @@ public class ExecutionOptions extends OptionsBase {
               + "Bazel uses a separate action to generate a dummy test.xml file containing the "
               + "test log. Otherwise, Bazel generates a test.xml as part of the test action.")
   public boolean splitXmlGeneration;
+
+  /** An enum for specifying different formats of test output. */
+  public enum TestOutputFormat {
+    SUMMARY, // Provide summary output only.
+    ERRORS, // Print output from failed tests to the stderr after the test failure.
+    ALL, // Print output from all tests to the stderr after the test completion.
+    STREAMED; // Stream output for each test.
+
+    /** Converts to {@link TestOutputFormat}. */
+    public static class Converter extends EnumConverter<TestOutputFormat> {
+      public Converter() {
+        super(TestOutputFormat.class, "test output");
+      }
+    }
+  }
+
+  /** An enum for specifying different formatting styles of test summaries. */
+  public enum TestSummaryFormat {
+    SHORT, // Print information only about tests.
+    TERSE, // Like "SHORT", but even shorter: Do not print PASSED and NO STATUS tests.
+    DETAILED, // Print information only about failed test cases.
+    NONE, // Do not print summary.
+    TESTCASE; // Print summary in test case resolution, do not print detailed information about
+    // failed test cases.
+
+    /** Converts to {@link TestSummaryFormat}. */
+    public static class Converter extends EnumConverter<TestSummaryFormat> {
+      public Converter() {
+        super(TestSummaryFormat.class, "test summary");
+      }
+    }
+  }
 
   /** Converter for the --flaky_test_attempts option. */
   public static class TestAttemptsConverter extends PerLabelOptions.PerLabelOptionsConverter {

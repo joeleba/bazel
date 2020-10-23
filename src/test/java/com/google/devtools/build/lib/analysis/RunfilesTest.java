@@ -20,17 +20,21 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
+import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
+import com.google.devtools.build.skyframe.SkyFunctionName;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import javax.annotation.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -131,6 +135,72 @@ public class RunfilesTest extends FoundationTestCase {
         .that(eventCollector.count())
         .isEqualTo(1);
     assertThat(Iterables.getOnlyElement(eventCollector).getKind()).isEqualTo(EventKind.ERROR);
+  }
+
+  private static final class SimpleActionLookupKey implements ActionLookupKey {
+    private final String name;
+
+    SimpleActionLookupKey(String name) {
+      this.name = name;
+    }
+
+    @Override
+    public SkyFunctionName functionName() {
+      return SkyFunctionName.createHermetic(name);
+    }
+
+    @Nullable
+    @Override
+    public Label getLabel() {
+      return null;
+    }
+  }
+
+  @Test
+  public void testPutDerivedArtifactWithDifferentOwnerDoesNotConflict() throws Exception {
+    ArtifactRoot root = ArtifactRoot.asDerivedRoot(scratch.dir("/workspace"), "out");
+    PathFragment path = PathFragment.create("src/foo.cc");
+
+    SimpleActionLookupKey owner1 = new SimpleActionLookupKey("//owner1");
+    SimpleActionLookupKey owner2 = new SimpleActionLookupKey("//owner2");
+    Artifact artifact1 =
+        new Artifact.DerivedArtifact(root, root.getExecPath().getRelative(path), owner1);
+    Artifact artifact2 =
+        new Artifact.DerivedArtifact(root, root.getExecPath().getRelative(path), owner2);
+
+    Map<PathFragment, Artifact> map = new LinkedHashMap<>();
+
+    Runfiles.ConflictChecker checker =
+        new Runfiles.ConflictChecker(Runfiles.ConflictPolicy.WARN, reporter, null);
+    checker.put(map, path, artifact1);
+    assertThat(map.entrySet()).containsExactly(Maps.immutableEntry(path, artifact1));
+    checker.put(map, path, artifact2);
+    assertThat(map.entrySet()).containsExactly(Maps.immutableEntry(path, artifact2));
+    assertNoEvents();
+  }
+
+  @Test
+  public void testPutDerivedArtifactWithDifferentPathConflicts() throws Exception {
+    ArtifactRoot root = ArtifactRoot.asDerivedRoot(scratch.dir("/workspace"), "out");
+    PathFragment path = PathFragment.create("src/foo.cc");
+    PathFragment path2 = PathFragment.create("src/bar.cc");
+
+    SimpleActionLookupKey owner1 = new SimpleActionLookupKey("//owner1");
+    SimpleActionLookupKey owner2 = new SimpleActionLookupKey("//owner2");
+    Artifact artifact1 =
+        new Artifact.DerivedArtifact(root, root.getExecPath().getRelative(path), owner1);
+    Artifact artifact2 =
+        new Artifact.DerivedArtifact(root, root.getExecPath().getRelative(path2), owner2);
+
+    Map<PathFragment, Artifact> map = new LinkedHashMap<>();
+
+    Runfiles.ConflictChecker checker =
+        new Runfiles.ConflictChecker(Runfiles.ConflictPolicy.WARN, reporter, null);
+    checker.put(map, path, artifact1);
+    assertThat(map.entrySet()).containsExactly(Maps.immutableEntry(path, artifact1));
+    checker.put(map, path, artifact2);
+    assertThat(map.entrySet()).containsExactly(Maps.immutableEntry(path, artifact2));
+    checkConflictWarning();
   }
 
   @Test

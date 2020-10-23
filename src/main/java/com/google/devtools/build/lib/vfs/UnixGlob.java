@@ -249,12 +249,30 @@ public final class UnixGlob {
         case '?':
           regexp.append('.');
           break;
-        //escape the regexp special characters that are allowed in wildcards
-        case '^': case '$': case '|': case '+':
-        case '{': case '}': case '[': case ']':
-        case '\\': case '.':
+        case '^':
+        case '$':
+        case '|':
+        case '+':
+        case '{':
+        case '}':
+        case '[':
+        case ']':
+        case '\\':
+        case '.':
+          // escape the regexp special characters that are allowed in wildcards
           regexp.append('\\');
           regexp.append(c);
+          break;
+        case '(':
+        case ')':
+          // The historical undocumented behavior of this function was to add '(' and ')' to the
+          // regexp pattern string unescaped. That could have 2 effects: a no-op (if the parentheses
+          // were properly paired) or a PatternSyntaxException leading to a Bazel crash (if the
+          // parentheses were unpaired). The behavior was silly, but changing it will break existing
+          // BUILD files which e.g. call `glob(["(*.foo)"])`. To keep such BUILD files working while
+          // avoiding crashes, treat '(' and ')' as a safe no-op when compiling to regexp.
+          // TODO(b/154003471): change this behavior and start treating '(' and ')' as literal
+          // characters to match in a glob pattern. This change will require an incompatible flag.
           break;
         default:
           regexp.append(c);
@@ -617,9 +635,9 @@ public final class UnixGlob {
       return null;
     }
 
-    /** Should only be called by link {@GlobTaskContext}. */
-    private void queueGlob(final Path base, final boolean baseIsDir, final int idx,
-        final GlobTaskContext context) {
+    /** Should only be called by link {@link GlobTaskContext}. */
+    private void queueGlob(
+        final Path base, final boolean baseIsDir, final int idx, final GlobTaskContext context) {
       enqueue(
           new Runnable() {
             @Override
@@ -647,12 +665,12 @@ public final class UnixGlob {
           });
     }
 
-    /** Should only be called by link {@GlobTaskContext}. */
+    /** Should only be called by link {@link GlobTaskContext}. */
     private void queueTask(Runnable runnable) {
       enqueue(runnable);
     }
 
-    protected void enqueue(final Runnable r) {
+    void enqueue(final Runnable r) {
       totalOps.incrementAndGet();
       pendingOps.incrementAndGet();
 
@@ -678,7 +696,7 @@ public final class UnixGlob {
       return totalOps.get();
     }
 
-    protected void cancel() {
+    void cancel() {
       this.canceled = true;
     }
 

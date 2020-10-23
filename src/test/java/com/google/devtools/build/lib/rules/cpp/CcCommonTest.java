@@ -422,7 +422,7 @@ public class CcCommonTest extends BuildViewTestCase {
     assertThat(foo.get(CcInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
         .containsAtLeast(
             PathFragment.create(includesRoot),
-            targetConfig.getGenfilesFragment().getRelative(includesRoot));
+            targetConfig.getGenfilesFragment(RepositoryName.MAIN).getRelative(includesRoot));
   }
 
   @Test
@@ -436,7 +436,8 @@ public class CcCommonTest extends BuildViewTestCase {
 
     useConfiguration("--noincompatible_merge_genfiles_directory");
     ConfiguredTarget foo = getConfiguredTarget("//bang:bang");
-    PathFragment genfilesDir = targetConfig.getGenfilesFragment().getRelative(includesRoot);
+    PathFragment genfilesDir =
+        targetConfig.getGenfilesFragment(RepositoryName.MAIN).getRelative(includesRoot);
     assertThat(foo.get(CcInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
         .contains(genfilesDir);
 
@@ -470,8 +471,8 @@ public class CcCommonTest extends BuildViewTestCase {
             .addAll(
                 noIncludes.get(CcInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
             .add(PathFragment.create(includesRoot))
-            .add(targetConfig.getGenfilesFragment().getRelative(includesRoot))
-            .add(targetConfig.getBinFragment().getRelative(includesRoot))
+            .add(targetConfig.getGenfilesFragment(RepositoryName.MAIN).getRelative(includesRoot))
+            .add(targetConfig.getBinFragment(RepositoryName.MAIN).getRelative(includesRoot))
             .build();
     assertThat(foo.get(CcInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
         .containsExactlyElementsIn(expected);
@@ -843,7 +844,7 @@ public class CcCommonTest extends BuildViewTestCase {
     assertThat(ccCompilationContext.getIncludeDirs())
         .containsExactly(
             getTargetConfiguration()
-                .getBinFragment()
+                .getBinFragment(RepositoryName.MAIN)
                 .getRelative("third_party/a/_virtual_includes/a"));
   }
 
@@ -1054,6 +1055,44 @@ public class CcCommonTest extends BuildViewTestCase {
                 .map(x -> removeOutDirectory(x))
                 .collect(ImmutableList.toImmutableList()))
         .containsExactly("/usr/bin/mock-gcc", "@/k8-fastbuild/bin/a/_objs/foo/foo.o.params");
+  }
+
+  @Test
+  public void testClangClParameters() throws Exception {
+    AnalysisMock.get()
+        .ccSupport()
+        .setupCcToolchainConfig(
+            mockToolsConfig,
+            CcToolchainConfig.builder()
+                .withFeatures(
+                    CppRuleClasses.TARGETS_WINDOWS,
+                    CppRuleClasses.COPY_DYNAMIC_LIBRARIES_TO_BINARY));
+    scratch.file(
+        "a/BUILD",
+        "cc_library(",
+        "    name='foo',",
+        "    srcs=['foo.cc'],",
+        "    copts=[",
+        "        '/imsvc', 'SYSTEM_INCLUDE_1',",
+        "        '-imsvcSYSTEM_INCLUDE_2',",
+        "        '/ISTANDARD_INCLUDE',",
+        "        '/FI', 'forced_include_1',",
+        "        '-FIforced_include_2',",
+        "    ],",
+        ")");
+    CppCompileAction cppCompileAction = getCppCompileAction("//a:foo");
+
+    PathFragment systemInclude1 = PathFragment.create("SYSTEM_INCLUDE_1");
+    PathFragment systemInclude2 = PathFragment.create("SYSTEM_INCLUDE_2");
+    PathFragment standardInclude = PathFragment.create("STANDARD_INCLUDE");
+
+    assertThat(cppCompileAction.getSystemIncludeDirs()).contains(systemInclude1);
+    assertThat(cppCompileAction.getSystemIncludeDirs()).contains(systemInclude2);
+    assertThat(cppCompileAction.getSystemIncludeDirs()).doesNotContain(standardInclude);
+
+    assertThat(cppCompileAction.getIncludeDirs()).doesNotContain(systemInclude1);
+    assertThat(cppCompileAction.getIncludeDirs()).doesNotContain(systemInclude2);
+    assertThat(cppCompileAction.getIncludeDirs()).contains(standardInclude);
   }
 
   @Test

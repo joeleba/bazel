@@ -20,14 +20,14 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
-import com.google.devtools.build.lib.actions.ActionLookupValue;
+import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.MiddlemanFactory;
 import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoCollection;
-import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory.BuildInfoKey;
+import com.google.devtools.build.lib.analysis.buildinfo.BuildInfoKey;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
@@ -35,9 +35,9 @@ import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.skyframe.BuildInfoCollectionValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.WorkspaceStatusValue;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.skyframe.SkyFunction;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.StarlarkSemantics;
 
 /**
  * The implementation of AnalysisEnvironment used for analysis. It tracks metadata for each
@@ -60,7 +61,7 @@ import javax.annotation.Nullable;
 public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   private final ArtifactFactory artifactFactory;
 
-  private final ActionLookupValue.ActionLookupKey owner;
+  private final ActionLookupKey owner;
   /**
    * If this is the system analysis environment, then errors and warnings are directly reported
    * to the global reporter, rather than stored, i.e., we don't track here whether there are any
@@ -95,7 +96,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   public CachingAnalysisEnvironment(
       ArtifactFactory artifactFactory,
       ActionKeyContext actionKeyContext,
-      ActionLookupValue.ActionLookupKey owner,
+      ActionLookupKey owner,
       boolean isSystemEnv,
       boolean extendedSanityChecks,
       boolean allowAnalysisFailures,
@@ -312,6 +313,11 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   }
 
   @Override
+  public Artifact getSourceArtifactForNinjaBuild(PathFragment execPath, Root root) {
+    return artifactFactory.getSourceArtifact(execPath, root, owner);
+  }
+
+  @Override
   public Artifact.DerivedArtifact getFilesetArtifact(
       PathFragment rootRelativePath, ArtifactRoot root) {
     Preconditions.checkState(enabled);
@@ -352,7 +358,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   }
 
   @Override
-  public StarlarkSemantics getSkylarkSemantics() throws InterruptedException {
+  public StarlarkSemantics getStarlarkSemantics() throws InterruptedException {
     return PrecomputedValue.STARLARK_SEMANTICS.get(skyframeEnv);
   }
 
@@ -389,7 +395,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   }
 
   @Override
-  public ActionLookupValue.ActionLookupKey getOwner() {
+  public ActionLookupKey getOwner() {
     return owner;
   }
 

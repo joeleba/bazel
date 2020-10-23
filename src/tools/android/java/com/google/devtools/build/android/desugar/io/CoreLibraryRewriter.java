@@ -105,7 +105,7 @@ public class CoreLibraryRewriter {
 
   private ClassName prefix(ClassName className) {
     if (shouldPrefix(className.binaryName())) {
-      return className.prependPrefix(prefix);
+      return className.withPackagePrefix(prefix);
     }
     return className;
   }
@@ -165,7 +165,7 @@ public class CoreLibraryRewriter {
     private String finalClassName;
 
     UnprefixingClassWriter(int flags) {
-      super(Opcodes.ASM7);
+      super(Opcodes.ASM8);
       this.writer = new ClassWriter(flags);
       this.cv = this.writer;
       if (!prefix.isEmpty()) {
@@ -188,7 +188,14 @@ public class CoreLibraryRewriter {
     }
 
     public byte[] toByteArray() {
-      return writer.toByteArray();
+      // Wires the desugared byte output to a semantically no-op ASM class visitor before output
+      // delivery to ensure byte-level class file idempotency, including the constant pool ordering.
+      // b/162369442.
+      byte[] bytes = writer.toByteArray();
+      ClassReader cr = new ClassReader(bytes);
+      ClassWriter cw = new ClassWriter(0);
+      cr.accept(cw, 0);
+      return cw.toByteArray();
     }
 
     @Override

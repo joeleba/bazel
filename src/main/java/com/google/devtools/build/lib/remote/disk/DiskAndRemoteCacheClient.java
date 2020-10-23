@@ -107,7 +107,7 @@ public final class DiskAndRemoteCacheClient implements RemoteCacheClient {
   }
 
   private Path newTempPath() {
-    return diskCache.toPath(UUID.randomUUID().toString(), /* actionResult= */ false);
+    return diskCache.toPathNoSplit(UUID.randomUUID().toString());
   }
 
   private static ListenableFuture<Void> closeStreamOnError(
@@ -163,14 +163,15 @@ public final class DiskAndRemoteCacheClient implements RemoteCacheClient {
   }
 
   @Override
-  public ListenableFuture<ActionResult> downloadActionResult(ActionKey actionKey) {
+  public ListenableFuture<ActionResult> downloadActionResult(
+      ActionKey actionKey, boolean inlineOutErr) {
     if (diskCache.containsActionResult(actionKey)) {
-      return diskCache.downloadActionResult(actionKey);
+      return diskCache.downloadActionResult(actionKey, inlineOutErr);
     }
 
     if (!options.incompatibleRemoteResultsIgnoreDisk || options.remoteAcceptCached) {
       return Futures.transformAsync(
-          remoteCache.downloadActionResult(actionKey),
+          remoteCache.downloadActionResult(actionKey, inlineOutErr),
           (actionResult) -> {
             if (actionResult == null) {
               return Futures.immediateFuture(null);

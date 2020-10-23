@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.exec;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.exec.Protos.Digest;
 import com.google.devtools.build.lib.exec.Protos.EnvironmentVariable;
 import com.google.devtools.build.lib.exec.Protos.File;
@@ -41,6 +42,9 @@ import com.google.devtools.build.lib.exec.SpawnCache.CacheHandle;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.Spawn.Code;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.testutil.Suite;
 import com.google.devtools.build.lib.testutil.TestSpec;
@@ -63,9 +67,14 @@ import org.mockito.MockitoAnnotations;
 @RunWith(JUnit4.class)
 @TestSpec(size = Suite.SMALL_TESTS)
 public class AbstractSpawnStrategyTest {
+  private static final FailureDetail NON_ZERO_EXIT_DETAILS =
+      FailureDetail.newBuilder()
+          .setSpawn(FailureDetails.Spawn.newBuilder().setCode(Code.NON_ZERO_EXIT))
+          .build();
+
   private static class TestedSpawnStrategy extends AbstractSpawnStrategy {
     public TestedSpawnStrategy(Path execRoot, SpawnRunner spawnRunner) {
-      super(execRoot, spawnRunner);
+      super(execRoot, spawnRunner, /*verboseFailures=*/ true);
     }
   }
 
@@ -85,6 +94,8 @@ public class AbstractSpawnStrategyTest {
     MockitoAnnotations.initMocks(this);
     scratch = new Scratch(fs);
     rootDir = ArtifactRoot.asSourceRoot(Root.fromPath(scratch.dir("/execroot")));
+    StoredEventHandler eventHandler = new StoredEventHandler();
+    when(actionExecutionContext.getEventHandler()).thenReturn(eventHandler);
   }
 
   @Test
@@ -113,6 +124,7 @@ public class AbstractSpawnStrategyTest {
         new SpawnResult.Builder()
             .setStatus(Status.NON_ZERO_EXIT)
             .setExitCode(1)
+            .setFailureDetail(NON_ZERO_EXIT_DETAILS)
             .setRunnerName("test")
             .build();
     when(spawnRunner.execAsync(any(Spawn.class), any(SpawnExecutionContext.class)))
@@ -146,7 +158,6 @@ public class AbstractSpawnStrategyTest {
     verify(spawnRunner, never()).execAsync(any(Spawn.class), any(SpawnExecutionContext.class));
   }
 
-  @SuppressWarnings("unchecked")
   @Test
   public void testCacheMiss() throws Exception {
     SpawnCache cache = mock(SpawnCache.class);
@@ -172,7 +183,6 @@ public class AbstractSpawnStrategyTest {
     verify(entry).store(eq(spawnResult));
   }
 
-  @SuppressWarnings("unchecked")
   @Test
   public void testCacheMissWithNonZeroExit() throws Exception {
     SpawnCache cache = mock(SpawnCache.class);
@@ -187,6 +197,7 @@ public class AbstractSpawnStrategyTest {
         new SpawnResult.Builder()
             .setStatus(Status.NON_ZERO_EXIT)
             .setExitCode(1)
+            .setFailureDetail(NON_ZERO_EXIT_DETAILS)
             .setRunnerName("test")
             .build();
     when(spawnRunner.execAsync(any(Spawn.class), any(SpawnExecutionContext.class)))
@@ -294,7 +305,7 @@ public class AbstractSpawnStrategyTest {
   }
 
   @Test
-  public void testLogSpawn_DefaultPlatform_getsLogged() throws Exception {
+  public void testLogSpawn_defaultPlatform_getsLogged() throws Exception {
     RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
     remoteOptions.remoteDefaultPlatformProperties =
         String.join(
@@ -324,7 +335,7 @@ public class AbstractSpawnStrategyTest {
   }
 
   @Test
-  public void testLogSpawn_SpecifiedPlatform_overridesDefault() throws Exception {
+  public void testLogSpawn_specifiedPlatform_overridesDefault() throws Exception {
     RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
     remoteOptions.remoteDefaultPlatformProperties =
         String.join(
@@ -382,6 +393,7 @@ public class AbstractSpawnStrategyTest {
                 new SpawnResult.Builder()
                     .setStatus(Status.NON_ZERO_EXIT)
                     .setExitCode(23)
+                    .setFailureDetail(NON_ZERO_EXIT_DETAILS)
                     .setRunnerName("runner")
                     .build()));
     when(actionExecutionContext.getMetadataProvider()).thenReturn(mock(MetadataProvider.class));

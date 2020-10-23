@@ -17,6 +17,7 @@ syntax = "proto3";
 package build_event_stream;
 
 import "src/main/protobuf/command_line.proto";
+import "src/main/protobuf/failure_details.proto";
 import "src/main/protobuf/invocation_policy.proto";
 
 option java_package = "com.google.devtools.build.lib.buildeventstream";
@@ -257,8 +258,8 @@ message Aborted {
     // remote execution of actions) was not available in the expected way.
     REMOTE_ENVIRONMENT_FAILURE = 3;
 
-    // Failure due to reasons entirely internal to the build tool, e.g.,
-    // running out of memory.
+    // Failure due to reasons entirely internal to the build tool, i.e. an
+    // unexpected crash due to programmer error.
     INTERNAL = 4;
 
     // A Failure occurred in the loading phase of a target.
@@ -273,6 +274,11 @@ message Aborted {
     // Build incomplete due to an earlier build failure (e.g. --keep_going was
     // set to false causing the build be ended upon failure).
     INCOMPLETE = 10;
+
+    // The build tool ran out of memory and crashed. Not yet used. OOMs are
+    // currently reported as INTERNAL.
+    // TODO(b/170643206): Use this reason for OOMs after updating consumers.
+    OUT_OF_MEMORY = 11;
   }
   AbortReason reason = 1;
 
@@ -473,6 +479,9 @@ message ActionExecuted {
 
   // List of paths to log files
   repeated File action_metadata_logs = 10;
+
+  // Only populated if success = false, and sometimes not even then.
+  failure_details.FailureDetail failure_detail = 11;
 }
 
 // Collection of all output files belonging to that output group.
@@ -522,6 +531,11 @@ message TargetComplete {
 
   // The timeout specified for test actions under this configured target.
   int64 test_timeout_seconds = 7;
+
+  // Failure information about the target, only populated if success is false,
+  // and sometimes not even then. Equal to one of the ActionExecuted
+  // failure_detail fields for one of the root cause ActionExecuted events.
+  failure_details.FailureDetail failure_detail = 9;
 }
 
 enum TestStatus {
@@ -613,6 +627,12 @@ message TestSummary {
 
   // Total number of runs
   int32 total_run_count = 1;
+
+  // Number of runs.
+  int32 run_count = 10;
+
+  // Number of shards.
+  int32 shard_count = 11;
 
   // Path to logs of passed runs.
   repeated File passed = 3;

@@ -27,16 +27,15 @@ import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.analysis.CachingAnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
-import com.google.devtools.build.lib.packages.RuleErrorConsumer;
-import com.google.devtools.build.lib.rules.android.databinding.DataBinding;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
@@ -186,7 +185,7 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
   @Before
   public void setup() throws Exception {
     errorConsumer = new FakeRuleErrorConsumer();
-    fileSystem = new InMemoryFileSystem();
+    fileSystem = new InMemoryFileSystem(DigestHashFunction.SHA256);
     root = ArtifactRoot.asSourceRoot(Root.fromPath(fileSystem.getPath("/")));
   }
 
@@ -236,7 +235,10 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
         /* env= */ new CachingAnalysisEnvironment(
             view.getArtifactFactory(),
             skyframeExecutor.getActionKeyContext(),
-            ConfiguredTargetKey.of(dummyTarget.getLabel(), targetConfig),
+            ConfiguredTargetKey.builder()
+                .setLabel(dummyTarget.getLabel())
+                .setConfiguration(targetConfig)
+                .build(),
             /*isSystemEnv=*/ false,
             targetConfig.extendedSanityChecks(),
             targetConfig.allowAnalysisFailures(),
@@ -244,36 +246,6 @@ public abstract class ResourceTestBase extends AndroidBuildViewTestCase {
             skyframeExecutor.getSkyFunctionEnvironmentForTesting(eventHandler)),
         new BuildConfigurationCollection(
             ImmutableList.of(dummy.getConfiguration()), dummy.getHostConfiguration()));
-  }
-
-  public ValidatedAndroidResources makeValidatedResourcesFor(
-      ImmutableList<Artifact> resources,
-      boolean includeAapt2Outs,
-      ProcessedAndroidManifest manifest,
-      ResourceDependencies resourceDependencies)
-      throws RuleErrorException {
-    return ValidatedAndroidResources.of(
-        MergedAndroidResources.of(
-            ParsedAndroidResources.of(
-                AndroidResources.forResources(errorConsumer, resources, "resource_files"),
-                getOutput("symbols.bin"),
-                includeAapt2Outs ? getOutput("symbols.zip") : null,
-                manifest.getManifest().getOwnerLabel(),
-                manifest,
-                DataBinding.DISABLED_V1_CONTEXT),
-            getOutput("merged/resources.zip"),
-            getOutput("class.jar"),
-            includeAapt2Outs ? getOutput("aapt2-r.txt") : null,
-            /* dataBindingInfoZip = */ null,
-            resourceDependencies,
-            manifest),
-        getOutput("r.txt"),
-        getOutput("source.jar"),
-        getOutput("resources.apk"),
-        includeAapt2Outs ? getOutput("aapt2-validation.txt") : null,
-        includeAapt2Outs ? getOutput("aapt2-source.jar") : null,
-        includeAapt2Outs ? getOutput("aapt2-static-lib") : null,
-        /*useRTxtFromMergedResources=*/ true);
   }
 
   /**

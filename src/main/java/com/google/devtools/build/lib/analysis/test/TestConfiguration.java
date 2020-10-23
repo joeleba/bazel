@@ -18,14 +18,15 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.OptionsDiffPredicate;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
+import com.google.devtools.build.lib.analysis.OptionsDiffPredicate;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
+import com.google.devtools.build.lib.analysis.config.Fragment;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.PerLabelOptions;
+import com.google.devtools.build.lib.analysis.test.TestShardingStrategy.ShardingStrategyConverter;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.TestTimeout;
 import com.google.devtools.build.lib.util.RegexFilter;
@@ -33,6 +34,7 @@ import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDefinition;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.TriState;
@@ -89,6 +91,16 @@ public class TestConfiguration extends Fragment {
     public String testFilter;
 
     @Option(
+        name = "test_runner_fail_fast",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "Forwards fail fast option to the test runner. The test runner should stop execution"
+                + " upon first failure.")
+    public boolean testRunnerFailFast;
+
+    @Option(
       name = "cache_test_results",
       defaultValue = "auto",
       abbrev = 't', // it's useful to toggle this on/off quickly
@@ -129,30 +141,29 @@ public class TestConfiguration extends Fragment {
     public boolean trimTestConfiguration;
 
     @Option(
-      name = "test_arg",
-      allowMultiple = true,
-      defaultValue = "",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "Specifies additional options and arguments that should be passed to the test "
-              + "executable. Can be used multiple times to specify several arguments. "
-              + "If multiple tests are executed, each of them will receive identical arguments. "
-              + "Used only by the 'bazel test' command."
-    )
+        name = "test_arg",
+        allowMultiple = true,
+        defaultValue = "null",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "Specifies additional options and arguments that should be passed to the test "
+                + "executable. Can be used multiple times to specify several arguments. "
+                + "If multiple tests are executed, each of them will receive identical arguments. "
+                + "Used only by the 'bazel test' command.")
     public List<String> testArguments;
 
     @Option(
         name = "test_sharding_strategy",
         defaultValue = "explicit",
-        converter = TestActionBuilder.ShardingStrategyConverter.class,
+        converter = ShardingStrategyConverter.class,
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.UNKNOWN},
         help =
             "Specify strategy for test sharding: "
                 + "'explicit' to only use sharding if the 'shard_count' BUILD attribute is "
                 + "present. 'disabled' to never use test sharding.")
-    public TestActionBuilder.TestShardingStrategy testShardingStrategy;
+    public TestShardingStrategy testShardingStrategy;
 
     @Option(
         name = "experimental_persistent_test_runner",
@@ -167,25 +178,23 @@ public class TestConfiguration extends Fragment {
     public boolean persistentTestRunner;
 
     @Option(
-      name = "runs_per_test",
-      allowMultiple = true,
-      defaultValue = "1",
-      converter = RunsPerTestConverter.class,
-      documentationCategory = OptionDocumentationCategory.TESTING,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "Specifies number of times to run each test. If any of those attempts "
-              + "fail for any reason, the whole test would be considered failed. "
-              + "Normally the value specified is just an integer. Example: --runs_per_test=3 "
-              + "will run all tests 3 times. "
-              + "Alternate syntax: regex_filter@runs_per_test. Where runs_per_test stands for "
-              + "an integer value and regex_filter stands "
-              + "for a list of include and exclude regular expression patterns (Also see "
-              + "--instrumentation_filter). Example: "
-              + "--runs_per_test=//foo/.*,-//foo/bar/.*@3 runs all tests in //foo/ "
-              + "except those under foo/bar three times. "
-              + "This option can be passed multiple times. "
-    )
+        name = "runs_per_test",
+        allowMultiple = true,
+        defaultValue = "1",
+        converter = RunsPerTestConverter.class,
+        documentationCategory = OptionDocumentationCategory.TESTING,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "Specifies number of times to run each test. If any of those attempts fail for any"
+                + " reason, the whole test is considered failed. Normally the value specified is"
+                + " just an integer. Example: --runs_per_test=3 will run all tests 3 times."
+                + " Alternate syntax: regex_filter@runs_per_test. Where runs_per_test stands for"
+                + " an integer value and regex_filter stands for a list of include and exclude"
+                + " regular expression patterns (Also see --instrumentation_filter). Example:"
+                + " --runs_per_test=//foo/.*,-//foo/bar/.*@3 runs all tests in //foo/ except those"
+                + " under foo/bar three times. This option can be passed multiple times. The most"
+                + " recently passed argument that matches takes precedence. If nothing matches,"
+                + " the test is only run once.")
     public List<PerLabelOptions> runsPerTest;
 
     @Option(
@@ -251,6 +260,20 @@ public class TestConfiguration extends Fragment {
                 + "coverage run.")
     public boolean fetchAllCoverageOutputs;
 
+    @Option(
+        name = "incompatible_exclusive_test_sandboxed",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        metadataTags = {
+            OptionMetadataTag.INCOMPATIBLE_CHANGE,
+            OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+        },
+        help =
+            "If true, exclusive tests will run with sandboxed strategy. Add 'local' tag to force "
+                + "an exclusive test run locally")
+    public boolean incompatibleExclusiveTestSandboxed;
+
     @Override
     public FragmentOptions getHost() {
       TestOptions hostOptions = (TestOptions) getDefault();
@@ -303,6 +326,10 @@ public class TestConfiguration extends Fragment {
     return options.testFilter;
   }
 
+  public boolean getTestRunnerFailFast() {
+    return options.testRunnerFailFast;
+  }
+
   public TriState cacheTestResults() {
     return options.cacheTestResults;
   }
@@ -311,10 +338,16 @@ public class TestConfiguration extends Fragment {
     return options.testArguments;
   }
 
-  public TestActionBuilder.TestShardingStrategy testShardingStrategy() {
+  public TestShardingStrategy testShardingStrategy() {
     return options.testShardingStrategy;
   }
 
+  /**
+   * Whether the persistent test runner is enabled. Note that not all test rules support this
+   * feature, in which case Bazel should fall back to the normal test runner. Therefore, this method
+   * must only be called by test rules, and never for test actions. For actions, use {@code
+   * TestTargetProperties.isPersistentTestRunner} instead.
+   */
   public boolean isPersistentTestRunner() {
     return options.persistentTestRunner;
   }
@@ -351,6 +384,8 @@ public class TestConfiguration extends Fragment {
   public boolean fetchAllCoverageOutputs() {
     return options.fetchAllCoverageOutputs;
   }
+
+  public boolean incompatibleExclusiveTestSandboxed() { return options.incompatibleExclusiveTestSandboxed; }
 
   /**
    * Option converter that han handle two styles of value for "--runs_per_test":

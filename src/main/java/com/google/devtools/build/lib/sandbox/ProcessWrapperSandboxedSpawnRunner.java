@@ -15,57 +15,67 @@
 package com.google.devtools.build.lib.sandbox;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.actions.ExecException;
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.exec.TreeDeleter;
 import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
-import com.google.devtools.build.lib.runtime.ProcessWrapperUtil;
+import com.google.devtools.build.lib.runtime.ProcessWrapper;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxInputs;
+import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.time.Duration;
+import javax.annotation.Nullable;
 
 /** Strategy that uses sandboxing to execute a process. */
 final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
 
   public static boolean isSupported(CommandEnvironment cmdEnv) {
-    return OS.isPosixCompatible() && ProcessWrapperUtil.isSupported(cmdEnv);
+    return OS.isPosixCompatible() && ProcessWrapper.fromCommandEnvironment(cmdEnv) != null;
   }
 
-  private final Path processWrapper;
+  private final SandboxHelpers helpers;
+  private final ProcessWrapper processWrapper;
   private final Path execRoot;
   private final Path sandboxBase;
   private final LocalEnvProvider localEnvProvider;
-  private final Duration timeoutKillDelay;
+  @Nullable private final SandboxfsProcess sandboxfsProcess;
+  private final boolean sandboxfsMapSymlinkTargets;
   private final TreeDeleter treeDeleter;
 
   /**
    * Creates a sandboxed spawn runner that uses the {@code process-wrapper} tool.
    *
+   * @param helpers common tools and state across all spawns during sandboxed execution
    * @param cmdEnv the command environment to use
    * @param sandboxBase path to the sandbox base directory
-   * @param productName the product name to use
-   * @param timeoutKillDelay additional grace period before killing timing out commands
+   * @param sandboxfsProcess instance of the sandboxfs process to use; may be null for none, in
+   *     which case the runner uses a symlinked sandbox
+   * @param sandboxfsMapSymlinkTargets map the targets of symlinks within the sandbox if true
    */
   ProcessWrapperSandboxedSpawnRunner(
+      SandboxHelpers helpers,
       CommandEnvironment cmdEnv,
       Path sandboxBase,
-      String productName,
-      Duration timeoutKillDelay,
+      @Nullable SandboxfsProcess sandboxfsProcess,
+      boolean sandboxfsMapSymlinkTargets,
       TreeDeleter treeDeleter) {
     super(cmdEnv);
-    this.processWrapper = ProcessWrapperUtil.getProcessWrapper(cmdEnv);
+    this.helpers = helpers;
+    this.processWrapper = ProcessWrapper.fromCommandEnvironment(cmdEnv);
     this.execRoot = cmdEnv.getExecRoot();
     this.localEnvProvider = LocalEnvProvider.forCurrentOs(cmdEnv.getClientEnv());
     this.sandboxBase = sandboxBase;
-    this.timeoutKillDelay = timeoutKillDelay;
+    this.sandboxfsProcess = sandboxfsProcess;
+    this.sandboxfsMapSymlinkTargets = sandboxfsMapSymlinkTargets;
     this.treeDeleter = treeDeleter;
   }
 
   @Override
   protected SandboxedSpawn prepareSpawn(Spawn spawn, SpawnExecutionContext context)
-      throws IOException, ExecException {
+      throws IOException, InterruptedException {
     // Each invocation of "exec" gets its own sandbox base.
     // Note that the value returned by context.getId() is only unique inside one given SpawnRunner,
     // so we have to prefix our name to turn it into a globally unique value.
@@ -76,7 +86,8 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
 
     // b/64689608: The execroot of the sandboxed process must end with the workspace name, just like
     // the normal execroot does.
-    Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(execRoot.getBaseName());
+    String workspaceName = execRoot.getBaseName();
+    Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(workspaceName);
     sandboxExecRoot.getParentDirectory().createDirectory();
     sandboxExecRoot.createDirectory();
 
@@ -84,11 +95,11 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), binTools, "/tmp");
 
     Duration timeout = context.getTimeout();
-    ProcessWrapperUtil.CommandLineBuilder commandLineBuilder =
-        ProcessWrapperUtil.commandLineBuilder(processWrapper.getPathString(), spawn.getArguments())
+    ProcessWrapper.CommandLineBuilder commandLineBuilder =
+        processWrapper
+            .commandLineBuilder(spawn.getArguments())
+            .addExecutionInfo(spawn.getExecutionInfo())
             .setTimeout(timeout);
-
-    commandLineBuilder.setKillDelay(timeoutKillDelay);
 
     Path statisticsPath = null;
     if (getSandboxOptions().collectLocalSandboxExecutionStatistics) {
@@ -96,20 +107,36 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
       commandLineBuilder.setStatisticsPath(statisticsPath);
     }
 
-    return new SymlinkedSandboxedSpawn(
-        sandboxPath,
-        sandboxExecRoot,
-        commandLineBuilder.build(),
-        environment,
-        SandboxHelpers.processInputFiles(
-            spawn,
-            context,
-            execRoot,
-            getSandboxOptions().symlinkedSandboxExpandsTreeArtifactsInRunfilesTree),
-        SandboxHelpers.getOutputs(spawn),
-        getWritableDirs(sandboxExecRoot, environment),
-        treeDeleter,
-        statisticsPath);
+    SandboxInputs inputs =
+        helpers.processInputFiles(
+            context.getInputMapping(), spawn, context.getArtifactExpander(), execRoot);
+    SandboxOutputs outputs = helpers.getOutputs(spawn);
+
+    if (sandboxfsProcess != null) {
+      return new SandboxfsSandboxedSpawn(
+          sandboxfsProcess,
+          sandboxPath,
+          workspaceName,
+          commandLineBuilder.build(),
+          environment,
+          inputs,
+          outputs,
+          ImmutableSet.of(),
+          sandboxfsMapSymlinkTargets,
+          treeDeleter,
+          statisticsPath);
+    } else {
+      return new SymlinkedSandboxedSpawn(
+          sandboxPath,
+          sandboxExecRoot,
+          commandLineBuilder.build(),
+          environment,
+          inputs,
+          outputs,
+          getWritableDirs(sandboxExecRoot, environment),
+          treeDeleter,
+          statisticsPath);
+    }
   }
 
   @Override

@@ -16,13 +16,14 @@ package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.common.eventbus.Subscribe;
+import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Runnables;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutedEvent;
@@ -40,10 +41,15 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.PrintingEventHandler;
+import com.google.devtools.build.lib.server.FailureDetails.Crash;
+import com.google.devtools.build.lib.server.FailureDetails.Crash.Code;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.Suite;
 import com.google.devtools.build.lib.testutil.TestSpec;
 import com.google.devtools.build.lib.testutil.TestUtils;
+import com.google.devtools.build.lib.util.DetailedExitCode;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -61,7 +67,6 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -75,7 +80,7 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class ParallelBuilderTest extends TimestampBuilderTestCase {
 
-  private static final Logger logger = Logger.getLogger(ParallelBuilderTest.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   protected ActionCache cache;
 
@@ -243,59 +248,60 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
   }
 
   @Test
-  public void testUpdateCacheError() throws Exception {
-    FileSystem fs = new InMemoryFileSystem() {
-      @Override
-      public FileStatus statIfFound(Path path, boolean followSymlinks) throws IOException {
-        final FileStatus stat = super.statIfFound(path, followSymlinks);
-        if (path.toString().endsWith("/out/foo")) {
-          return new FileStatus() {
-            private final FileStatus original = stat;
+  public void testUpdateCacheError() {
+    FileSystem fs =
+        new InMemoryFileSystem(DigestHashFunction.SHA256) {
+          @Override
+          public FileStatus statIfFound(Path path, boolean followSymlinks) throws IOException {
+            final FileStatus stat = super.statIfFound(path, followSymlinks);
+            if (path.toString().endsWith("/out/foo")) {
+              return new FileStatus() {
+                private final FileStatus original = stat;
 
-            @Override
-            public boolean isSymbolicLink() {
-              return original.isSymbolicLink();
-            }
+                @Override
+                public boolean isSymbolicLink() {
+                  return original.isSymbolicLink();
+                }
 
-            @Override
-            public boolean isFile() {
-              return original.isFile();
-            }
+                @Override
+                public boolean isFile() {
+                  return original.isFile();
+                }
 
-            @Override
-            public boolean isDirectory() {
-              return original.isDirectory();
-            }
+                @Override
+                public boolean isDirectory() {
+                  return original.isDirectory();
+                }
 
-            @Override
-            public boolean isSpecialFile() {
-              return original.isSpecialFile();
-            }
+                @Override
+                public boolean isSpecialFile() {
+                  return original.isSpecialFile();
+                }
 
-            @Override
-            public long getSize() throws IOException {
-              return original.getSize();
-            }
+                @Override
+                public long getSize() throws IOException {
+                  return original.getSize();
+                }
 
-            @Override
-            public long getNodeId() throws IOException {
-              return original.getNodeId();
-            }
+                @Override
+                public long getNodeId() throws IOException {
+                  return original.getNodeId();
+                }
 
-            @Override
-            public long getLastModifiedTime() throws IOException {
-              throw new IOException();
-            }
+                @Override
+                public long getLastModifiedTime() throws IOException {
+                  throw new IOException();
+                }
 
-            @Override
-            public long getLastChangeTime() throws IOException {
-              throw new IOException();
+                @Override
+                public long getLastChangeTime() throws IOException {
+                  throw new IOException();
+                }
+              };
             }
-          };
-        }
-        return stat;
-      }
-    };
+            return stat;
+          }
+        };
     Artifact foo = createDerivedArtifact(fs, "foo");
     registerAction(new TestAction(TestAction.NO_EFFECT, emptyNestedSet, ImmutableSet.of(foo)));
     reporter.removeHandler(failFastHandler);
@@ -306,7 +312,7 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
   @Test
   public void testNullBuild() throws Exception {
     // BuildTool.setupLogging(Level.FINEST);
-    logger.fine("Testing null build...");
+    logger.atFine().log("Testing null build...");
     buildArtifacts();
   }
 
@@ -346,7 +352,7 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
         List<Counter> counters = buildRandomActionGraph(trial);
 
         // do a clean build
-        logger.fine("Testing clean build... (trial " + trial + ")");
+        logger.atFine().log("Testing clean build... (trial %d)", trial);
         Artifact[] buildTargets = chooseRandomBuild();
         buildArtifacts(buildTargets);
         doSanityChecks(buildTargets, counters, BuildKind.Clean);
@@ -357,14 +363,14 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
         // BuildTool creates new instances of the Builder for each build request. It may rely on
         // that fact (that its state will be discarded after each build request) - thus
         // test should use same approach and ensure that a new instance is used each time.
-        logger.fine("Testing incremental build...");
+        logger.atFine().log("Testing incremental build...");
         buildTargets = chooseRandomBuild();
         buildArtifacts(buildTargets);
         doSanityChecks(buildTargets, counters, BuildKind.Incremental);
         resetCounters(counters);
 
         // do a do-nothing build
-        logger.fine("Testing do-nothing rebuild...");
+        logger.atFine().log("Testing do-nothing rebuild...");
         buildArtifacts(buildTargets);
         doSanityChecks(buildTargets, counters, BuildKind.Nop);
         //resetCounters(counters);
@@ -431,14 +437,14 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
       switch (random.nextInt(4)) {
         case 0:
           // build the final output target
-          logger.fine("Building final output target.");
+          logger.atFine().log("Building final output target.");
           buildTargets = new Artifact[] {artifacts[numArtifacts - 1]};
           break;
 
         case 1:
           {
             // build all the targets (in random order);
-            logger.fine("Building all the targets.");
+            logger.atFine().log("Building all the targets.");
             List<Artifact> targets = Lists.newArrayList(artifacts);
             Collections.shuffle(targets, random);
             buildTargets = targets.toArray(new Artifact[numArtifacts]);
@@ -447,19 +453,19 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
 
         case 2:
           // build a random target
-          logger.fine("Building a random target.");
+          logger.atFine().log("Building a random target.");
           buildTargets = new Artifact[] {artifacts[random.nextInt(numArtifacts)]};
           break;
 
         case 3:
           {
             // build a random subset of targets
-            logger.fine("Building a random subset of targets.");
+            logger.atFine().log("Building a random subset of targets.");
             List<Artifact> targets = Lists.newArrayList(artifacts);
             Collections.shuffle(targets, random);
             List<Artifact> targetSubset = new ArrayList<>();
             int numTargetsToTest = random.nextInt(numArtifacts);
-            logger.fine("numTargetsToTest = " + numTargetsToTest);
+            logger.atFine().log("numTargetsToTest = %d", numTargetsToTest);
             Iterator<Artifact> iterator = targets.iterator();
             for (int i = 0; i < numTargetsToTest; i++) {
               targetSubset.add(iterator.next());
@@ -487,10 +493,10 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
             //assert counter.count == 1;
             //break;
           case Incremental:
-            assert counter.count == 0 || counter.count == 1;
+            assertThat(counter.count).isAnyOf(0, 1);
             break;
           case Nop:
-            assert counter.count == 0;
+            assertThat(counter.count).isEqualTo(0);
             break;
         }
       }
@@ -684,7 +690,12 @@ public class ParallelBuilderTest extends TimestampBuilderTestCase {
                   throw new RuntimeException(e);
                 }
                 completedTasks.getAndIncrement();
-                throw new ActionExecutionException("This is a catastrophe", this, true);
+                DetailedExitCode code =
+                    DetailedExitCode.of(
+                        FailureDetail.newBuilder()
+                            .setCrash(Crash.newBuilder().setCode(Code.CRASH_UNKNOWN))
+                            .build());
+                throw new ActionExecutionException("This is a catastrophe", this, true, code);
               }
               return super.execute(actionExecutionContext);
             }

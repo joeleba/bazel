@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.query2.compat;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.License;
 import com.google.devtools.build.lib.packages.Package;
@@ -25,6 +24,7 @@ import com.google.devtools.build.lib.packages.RuleVisibility;
 import com.google.devtools.build.lib.packages.Target;
 import java.util.Objects;
 import java.util.Set;
+import net.starlark.java.syntax.Location;
 
 /**
  * A fake Target - Use only so that "blaze query" can report Load files as Targets.

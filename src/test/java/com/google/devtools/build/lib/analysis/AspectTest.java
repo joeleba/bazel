@@ -15,11 +15,10 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.analysis.BaseRuleClasses.ACTION_LISTENER;
-import static com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode.TARGET;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
@@ -44,7 +43,6 @@ import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundDefault;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
-import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -328,6 +326,26 @@ public class AspectTest extends AnalysisTestCase {
   }
 
   @Test
+  public void aspectDependsOnPackageGroup() throws Exception {
+    setRulesAvailableInTests(
+        TestAspects.BASE_RULE, TestAspects.PACKAGE_GROUP_ATTRIBUTE_ASPECT_RULE);
+    pkg("extra", "package_group(name='extra')");
+    pkg("a", "rule_with_package_group_deps_aspect(name='a', foo=[':b'])", "base(name='b')");
+
+    getConfiguredTarget("//a:a");
+    assertContainsEventWithFrequency("bad aspect", 0);
+  }
+
+  @Test
+  public void aspectWithComputedAttribute() throws Exception {
+    setRulesAvailableInTests(TestAspects.BASE_RULE, TestAspects.COMPUTED_ATTRIBUTE_ASPECT_RULE);
+
+    pkg("a", "rule_with_computed_deps_aspect(name='a', foo=[':b'])", "base(name='b')");
+
+    getConfiguredTarget("//a:a");
+  }
+
+  @Test
   public void ruleDependencyDeprecationWarningsAbsentDuringAspectEvaluations() throws Exception {
     setRulesAvailableInTests(TestAspects.BASE_RULE, TestAspects.ASPECT_REQUIRING_RULE);
 
@@ -432,8 +450,8 @@ public class AspectTest extends AnalysisTestCase {
           AspectParameters parameters,
           String toolsRepository)
           throws InterruptedException, ActionConflictException {
-        Object lateBoundPrereq = ruleContext.getPrerequisite(":late", TARGET);
-        return new ConfiguredAspect.Builder(this, parameters, ruleContext)
+        Object lateBoundPrereq = ruleContext.getPrerequisite(":late");
+        return new ConfiguredAspect.Builder(ruleContext)
             .addProvider(
                 AspectInfo.class,
                 new AspectInfo(
@@ -506,7 +524,7 @@ public class AspectTest extends AnalysisTestCase {
           String toolsRepository)
           throws InterruptedException, ActionConflictException {
         ruleContext.registerAction(new NullAction(ruleContext.createOutputArtifact()));
-        return new ConfiguredAspect.Builder(this, parameters, ruleContext).build();
+        return new ConfiguredAspect.Builder(ruleContext).build();
       }
     }
   }
@@ -604,7 +622,7 @@ public class AspectTest extends AnalysisTestCase {
         "extra_action(name='xa', cmd='echo dont-care')",
         "action_listener(name='listener', mnemonics=['Mnemonic'], extra_actions=[':xa'])");
 
-    // Sanity check: //x:d injects an aspect which produces some extra-action.
+    // Check: //x:d injects an aspect which produces some extra-action.
     {
       AnalysisResult analysisResult = update("//x:d");
 
@@ -833,9 +851,9 @@ public class AspectTest extends AnalysisTestCase {
     AnalysisResult analysisResult = update(new EventBus(), defaultFlags(),
         ImmutableList.of(aspectApplyingToFiles.getName()),
         "//a:x_deploy.jar");
-    AspectValue aspect = Iterables.getOnlyElement(analysisResult.getAspects());
+    ConfiguredAspect aspect = Iterables.getOnlyElement(analysisResult.getAspectsMap().values());
     AspectApplyingToFiles.Provider provider =
-        aspect.getConfiguredAspect().getProvider(AspectApplyingToFiles.Provider.class);
+        aspect.getProvider(AspectApplyingToFiles.Provider.class);
     assertThat(provider.getLabel())
         .isEqualTo(Label.parseAbsoluteUnchecked("//a:x_deploy.jar"));
   }
@@ -854,9 +872,8 @@ public class AspectTest extends AnalysisTestCase {
     AnalysisResult analysisResult = update(new EventBus(), defaultFlags(),
         ImmutableList.of(aspectApplyingToFiles.getName()),
         "//a:x.java");
-    AspectValue aspect = Iterables.getOnlyElement(analysisResult.getAspects());
-    assertThat(aspect.getConfiguredAspect().getProvider(AspectApplyingToFiles.Provider.class))
-        .isNull();
+    ConfiguredAspect aspect = Iterables.getOnlyElement(analysisResult.getAspectsMap().values());
+    assertThat(aspect.getProvider(AspectApplyingToFiles.Provider.class)).isNull();
   }
 
   @Test
@@ -872,9 +889,35 @@ public class AspectTest extends AnalysisTestCase {
             defaultFlags(),
             ImmutableList.of(aspectApplyingToFiles.getName(), aspectApplyingToFiles.getName()),
             "//a:x_deploy.jar");
-    AspectValue aspect = Iterables.getOnlyElement(analysisResult.getAspects());
+    ConfiguredAspect aspect = Iterables.getOnlyElement(analysisResult.getAspectsMap().values());
     AspectApplyingToFiles.Provider provider =
-        aspect.getConfiguredAspect().getProvider(AspectApplyingToFiles.Provider.class);
+        aspect.getProvider(AspectApplyingToFiles.Provider.class);
     assertThat(provider.getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//a:x_deploy.jar"));
+  }
+
+  @Test
+  public void sameConfiguredAttributeOnAspectAndRule() throws Exception {
+    scratch.file(
+        "a/a.bzl",
+        "def _a_impl(t, ctx):",
+        "  return [DefaultInfo()]",
+        "def _r_impl(ctx):",
+        "  return [DefaultInfo()]",
+        "a = aspect(",
+        "  implementation = _a_impl,",
+        "  attrs = {'_f': attr.label(",
+        "                   default = configuration_field(",
+        "                     fragment = 'cpp', name = 'cc_toolchain'))})",
+        "r = rule(",
+        "  implementation = _r_impl,",
+        "  attrs = {'_f': attr.label(",
+        "                   default = configuration_field(",
+        "                     fragment = 'cpp', name = 'cc_toolchain')),",
+        "           'dep': attr.label(aspects=[a])})");
+
+    scratch.file("a/BUILD", "load(':a.bzl', 'r')", "r(name='r')");
+
+    setRulesAndAspectsAvailableInTests(ImmutableList.of(), ImmutableList.of());
+    getConfiguredTarget("//a:r");
   }
 }

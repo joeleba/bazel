@@ -21,6 +21,7 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Actions.GeneratingActions;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -29,6 +30,9 @@ import com.google.devtools.build.skyframe.SkyValue;
  * A Skyframe function to calculate the coverage report Action and Artifacts.
  */
 public class CoverageReportFunction implements SkyFunction {
+
+  static final Precomputed<ImmutableList<ActionAnalysisMetadata>> COVERAGE_REPORT_KEY =
+      new Precomputed<>("coverage_report_actions");
   private final ActionKeyContext actionKeyContext;
 
   CoverageReportFunction(ActionKeyContext actionKeyContext) {
@@ -39,11 +43,11 @@ public class CoverageReportFunction implements SkyFunction {
   public SkyValue compute(SkyKey skyKey, Environment env) throws InterruptedException {
     Preconditions.checkState(
         CoverageReportValue.COVERAGE_REPORT_KEY.equals(skyKey),
-        String.format(
-            "Expected %s for SkyKey but got %s instead",
-            CoverageReportValue.COVERAGE_REPORT_KEY, skyKey));
+        "Expected %s for SkyKey but got %s instead",
+        CoverageReportValue.COVERAGE_REPORT_KEY,
+        skyKey);
 
-    ImmutableList<ActionAnalysisMetadata> actions = PrecomputedValue.COVERAGE_REPORT_KEY.get(env);
+    ImmutableList<ActionAnalysisMetadata> actions = COVERAGE_REPORT_KEY.get(env);
     if (actions == null) {
       return null;
     }

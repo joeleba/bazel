@@ -1,7 +1,10 @@
 filegroup(
     name = "srcs",
     srcs = glob(["**"]),
-    visibility = ["//src:__pkg__"],
+    visibility = [
+        "//src:__pkg__",
+        "//src/test/shell/bazel:__pkg__",
+    ],
 )
 
 filegroup(
@@ -10,8 +13,29 @@ filegroup(
     visibility = ["//src:__pkg__"],
 )
 
+# There is no config_setting for "linux".
+# See https://github.com/bazelbuild/bazel/issues/11107
+
+config_setting(
+    name = "linux_aarch64",
+    values = {"cpu": "aarch64"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "linux_arm",
+    values = {"cpu": "arm"},
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "linux_ppc",
+    values = {"cpu": "ppc"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "linux_ppc64le",
     values = {"cpu": "ppc"},
     visibility = ["//visibility:public"],
 )
@@ -37,6 +61,18 @@ config_setting(
 config_setting(
     name = "darwin_x86_64",
     values = {"cpu": "darwin_x86_64"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "darwin_arm64",
+    values = {"cpu": "darwin_arm64"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "darwin_arm64e",
+    values = {"cpu": "darwin_arm64e"},
     visibility = ["//visibility:public"],
 )
 
@@ -71,13 +107,15 @@ config_setting(
 )
 
 config_setting(
-    name = "linux_aarch64",
-    values = {"cpu": "aarch64"},
+    name = "remote",
+    values = {"define": "EXECUTOR=remote"},
     visibility = ["//visibility:public"],
 )
 
 config_setting(
-    name = "remote",
-    values = {"define": "EXECUTOR=remote"},
+    name = "debian_build",
+    values = {
+        "define": "distribution=debian",
+    },
     visibility = ["//visibility:public"],
 )

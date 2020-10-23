@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
+import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -31,10 +32,11 @@ import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.LazyWritePathsFileAction;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -50,13 +52,14 @@ import com.google.devtools.build.lib.rules.cpp.LibraryToLink;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.OneVersionEnforcementLevel;
 import com.google.devtools.build.lib.rules.java.proto.GeneratedExtensionRegistryProvider;
-import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import net.starlark.java.eval.EvalException;
 
 /** An implementation of java_binary. */
 public class JavaBinary implements RuleConfiguredTargetFactory {
@@ -82,7 +85,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
 
     JavaTargetAttributes.Builder attributesBuilder = common.initCommon();
     attributesBuilder.addClassPathResources(
-        ruleContext.getPrerequisiteArtifacts("classpath_resources", Mode.TARGET).list());
+        ruleContext.getPrerequisiteArtifacts("classpath_resources").list());
 
     // Add Java8 timezone resource data
     addTimezoneResourceForJavaBinaries(ruleContext, attributesBuilder);
@@ -121,8 +124,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     // deploy_env is valid for java_binary, but not for java_test.
     if (ruleContext.getRule().isAttrDefined("deploy_env", BuildType.LABEL_LIST)) {
       for (JavaRuntimeClasspathProvider envTarget :
-          ruleContext.getPrerequisites(
-              "deploy_env", Mode.TARGET, JavaRuntimeClasspathProvider.class)) {
+          ruleContext.getPrerequisites("deploy_env", JavaRuntimeClasspathProvider.class)) {
         attributesBuilder.addExcludedArtifacts(envTarget.getRuntimeClasspathNestedSet());
       }
     }
@@ -138,15 +140,20 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         ruleContext.getConfiguration().getFragment(CppConfiguration.class);
     CcToolchainProvider ccToolchain =
         CppHelper.getToolchainUsingDefaultCcToolchainAttribute(ruleContext);
-    FeatureConfiguration featureConfiguration =
-        CcCommon.configureFeaturesOrReportRuleError(
-            ruleContext,
-            /* requestedFeatures= */ ImmutableSet.<String>builder()
-                .addAll(ruleContext.getFeatures())
-                .add(STATIC_LINKING_MODE)
-                .build(),
-            /* unsupportedFeatures= */ ruleContext.getDisabledFeatures(),
-            ccToolchain);
+    FeatureConfiguration featureConfiguration = null;
+    try {
+      featureConfiguration =
+          CcCommon.configureFeaturesOrThrowEvalException(
+              /* requestedFeatures= */ ImmutableSet.<String>builder()
+                  .addAll(ruleContext.getFeatures())
+                  .add(STATIC_LINKING_MODE)
+                  .build(),
+              /* unsupportedFeatures= */ ruleContext.getDisabledFeatures(),
+              ccToolchain,
+              cppConfiguration);
+    } catch (EvalException e) {
+      ruleContext.ruleError(e.getMessage());
+    }
     boolean stripAsDefault =
         ccToolchain.shouldCreatePerObjectDebugInfo(featureConfiguration, cppConfiguration)
             && cppConfiguration.getCompilationMode() == CompilationMode.OPT;
@@ -323,7 +330,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     try {
       dynamicRuntimeActionInputs = ccToolchain.getDynamicRuntimeLinkInputs(featureConfiguration);
     } catch (EvalException e) {
-      throw ruleContext.throwWithRuleError(e.getMessage());
+      throw ruleContext.throwWithRuleError(e);
     }
 
     collectDefaultRunfiles(
@@ -351,7 +358,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
           RunfilesSupport.withExecutable(
               ruleContext, defaultRunfiles, executableForRunfiles, extraArgs);
       extraFilesToRunBuilder.add(runfilesSupport.getRunfilesMiddleman());
-      if (JavaSemantics.isPersistentTestRunner(ruleContext)) {
+      if (JavaSemantics.isTestTargetAndPersistentTestRunner(ruleContext)) {
         persistentTestRunnerRunfiles = JavaSemantics.getTestSupportRunfiles(ruleContext);
       }
     }
@@ -368,6 +375,8 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     ImmutableList<String> deployManifestLines =
         getDeployManifestLines(ruleContext, originalMainClass);
 
+    Artifact jsa = createSharedArchive(ruleContext, javaArtifacts, attributes);
+
     deployArchiveBuilder
         .setOutputJar(deployJar)
         .setJavaStartClass(mainClass)
@@ -381,7 +390,8 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         .setLauncher(launcher)
         .setOneVersionEnforcementLevel(
             javaConfig.oneVersionEnforcementLevel(),
-            JavaToolchainProvider.from(ruleContext).getOneVersionWhitelist())
+            JavaToolchainProvider.from(ruleContext).getOneVersionAllowlist())
+        .setSharedArchive(jsa)
         .build();
 
     Artifact unstrippedDeployJar =
@@ -465,13 +475,14 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
             .addProvider(
                 JavaSourceInfoProvider.class,
                 JavaSourceInfoProvider.fromJavaTargetAttributes(attributes, semantics))
+            .maybeTransitiveOnlyRuntimeJarsToJavaInfo(common.getDependencies(), true)
             .build();
 
     return builder
         .setFilesToBuild(filesToBuild)
         .addNativeDeclaredProvider(javaInfo)
-        .addSkylarkTransitiveInfo(
-            JavaSkylarkApiProvider.NAME, JavaSkylarkApiProvider.fromRuleContext())
+        .addStarlarkTransitiveInfo(
+            JavaStarlarkApiProvider.NAME, JavaStarlarkApiProvider.fromRuleContext())
         .add(RunfilesProvider.class, runfilesProvider)
         // The executable to run (below) may be different from the executable for runfiles (the one
         // we create the runfiles support object with). On Linux they are the same (it's the same
@@ -491,10 +502,73 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         .build();
   }
 
+  private static Artifact createSharedArchive(
+      RuleContext ruleContext,
+      JavaCompilationArtifacts javaArtifacts,
+      JavaTargetAttributes attributes)
+      throws InterruptedException {
+    if (!ruleContext.getRule().isAttrDefined("classlist", BuildType.LABEL)) {
+      return null;
+    }
+    Artifact classlist = ruleContext.getPrerequisiteArtifact("classlist");
+    if (classlist == null) {
+      return null;
+    }
+    NestedSet<Artifact> classpath =
+        NestedSetBuilder.<Artifact>stableOrder()
+            .addAll(javaArtifacts.getRuntimeJars())
+            .addTransitive(attributes.getRuntimeClassPathForArchive())
+            .build();
+    Artifact jsa = ruleContext.getImplicitOutputArtifact(JavaSemantics.SHARED_ARCHIVE_ARTIFACT);
+    Artifact merged =
+        ruleContext.getDerivedArtifact(
+            jsa.getOutputDirRelativePath(ruleContext.getConfiguration().isSiblingRepositoryLayout())
+                .replaceName(
+                    FileSystemUtils.removeExtension(jsa.getRootRelativePath().getBaseName())
+                        + "-merged.jar"),
+            jsa.getRoot());
+    SingleJarActionBuilder.createSingleJarAction(ruleContext, classpath, merged);
+    JavaRuntimeInfo javaRuntime = JavaRuntimeInfo.from(ruleContext);
+    Artifact configFile = ruleContext.getPrerequisiteArtifact("cds_config_file");
+
+    CustomCommandLine.Builder commandLine =
+        CustomCommandLine.builder()
+            .add("-Xshare:dump")
+            .addFormatted("-XX:SharedArchiveFile=%s", jsa.getExecPath())
+            .addFormatted("-XX:SharedClassListFile=%s", classlist.getExecPath());
+    if (configFile != null) {
+      commandLine.addFormatted("-XX:SharedArchiveConfigFile=%s", configFile.getExecPath());
+    }
+    commandLine.add("-cp").addExecPath(merged);
+    SpawnAction.Builder spawnAction = new SpawnAction.Builder();
+    if (ruleContext.getRule().isAttrDefined("jvm_flags_for_cds_image_creation", Type.STRING_LIST)) {
+      commandLine.addAll(
+          ruleContext
+              .getExpander()
+              .withDataExecLocations()
+              .list("jvm_flags_for_cds_image_creation"));
+      spawnAction.addTransitiveInputs(PrerequisiteArtifacts.nestedSet(ruleContext, "data"));
+    }
+    spawnAction
+        .setExecutable(javaRuntime.javaBinaryExecPathFragment())
+        .addCommandLine(commandLine.build())
+        .setMnemonic("JavaJSA")
+        .setProgressMessage("Dumping Java Shared Archive %s", jsa.prettyPrint())
+        .addOutput(jsa)
+        .addInput(classlist)
+        .addInput(merged)
+        .addTransitiveInputs(javaRuntime.javaBaseInputsMiddleman());
+    if (configFile != null) {
+      spawnAction.addInput(configFile);
+    }
+    ruleContext.registerAction(spawnAction.build(ruleContext));
+    return jsa;
+  }
+
   // Create the deploy jar and make it dependent on the runfiles middleman if an executable is
   // created. Do not add the deploy jar to files to build, so we will only build it when it gets
   // requested.
-  private ImmutableList<String> getDeployManifestLines(
+  private static ImmutableList<String> getDeployManifestLines(
       RuleContext ruleContext, String originalMainClass) {
     ImmutableList.Builder<String> builder =
         ImmutableList.<String>builder()
@@ -506,7 +580,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
   }
 
   /** Add Java8 timezone resource jar to java binary, if specified in tool chain. */
-  private void addTimezoneResourceForJavaBinaries(
+  private static void addTimezoneResourceForJavaBinaries(
       RuleContext ruleContext, JavaTargetAttributes.Builder attributesBuilder) {
     JavaToolchainProvider toolchainProvider = JavaToolchainProvider.from(ruleContext);
     if (toolchainProvider.getTimezoneData() != null) {
@@ -543,7 +617,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         Runfiles runfiles =
             defaultLauncher.getProvider(RunfilesProvider.class).getDefaultRunfiles();
         NestedSetBuilder<Artifact> unconditionalArtifacts = NestedSetBuilder.compileOrder();
-        for (Artifact a : runfiles.getUnconditionalArtifacts().toList()) {
+        for (Artifact a : runfiles.getArtifacts().toList()) {
           if (!a.equals(defaultLauncherArtifact)) {
             unconditionalArtifacts.add(a);
           }
@@ -551,7 +625,6 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
         builder.addTransitiveArtifacts(unconditionalArtifacts.build());
         builder.addSymlinks(runfiles.getSymlinks());
         builder.addRootSymlinks(runfiles.getRootSymlinks());
-        builder.addPruningManifests(runfiles.getPruningManifests());
       } else {
         builder.addTarget(defaultLauncher, RunfilesProvider.DEFAULT_RUNFILES);
       }
@@ -562,7 +635,7 @@ public class JavaBinary implements RuleConfiguredTargetFactory {
     builder.add(ruleContext, JavaRunfilesProvider.TO_RUNFILES);
 
     List<? extends TransitiveInfoCollection> runtimeDeps =
-        ruleContext.getPrerequisites("runtime_deps", Mode.TARGET);
+        ruleContext.getPrerequisites("runtime_deps");
     builder.addTargets(runtimeDeps, JavaRunfilesProvider.TO_RUNFILES);
     builder.addTargets(runtimeDeps, RunfilesProvider.DEFAULT_RUNFILES);
 

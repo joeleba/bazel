@@ -1,3 +1,625 @@
+## Release 3.7.0 (2020-10-20)
+
+```
+Baseline: a991db7c2f66a354666388d888dcef9b0d0f70c0
+```
+
+Incompatible changes:
+
+  - The syntax //foo/BUILD can no longer be used on the command line
+    to refer to the //foo:BUILD target. Use //foo:BUILD (preferred)
+    or foo/BUILD instead. This does not affect BUILD/bzl files, where
+    that syntax already didn't work.
+  - This removes `--objc_header_scanner_tool`. The flag was primarily
+    used internally, and to our knowledge, a compatible tool was
+    never released. Therefore this flag is believed to be unused.
+
+New features:
+
+  - select() directly supports constraint_value (no need for an
+    intermediate config_setting).
+
+Important changes:
+
+  - Non-android targets can again be built when
+    android_sdk_repository is present but invalid.
+  - Add a build variable for -install_name / -soname.
+  - Add a build variable for -install_name / -soname.
+  - Include "resources" attr in dependency attributes for java_*
+    coverage configuration.
+  - --trim_test_configuration should work for almost all cases when a
+    non-test target depends on a test.
+  - Javac now supports multiplex workers.
+  - Javac now supports multiplex workers.
+  - Blaze now allows symbolic links that point to their own ancestor
+    unless they are traversed recursively by e.g. a //... recursive
+    target pattern or a recursive glob.
+  - Blaze now allows symbolic links that point to their own ancestor
+    unless they are traversed recursively by e.g. a //... recursive
+    target pattern or a recursive glob.
+  - Blaze now allows symbolic links that point to their own ancestor
+    unless they are traversed recursively by e.g. a //... recursive
+    target pattern or a recursive glob.
+  - Generated Go protobufs no longer depend on //net/proto2/go:proto
+
+This release contains contributions from many people at Google, as well as Benjamin Peterson, Cristian Hancila, Ed Schouten, Fredrik Medley, Greg Estren, jgehw, Jin, Kalle Johansson, Keith Smiley, Kseniia Vasilchuk, Michael Eisel, Michael Hackner, Michael Krasnyk, Mostyn Bramley-Moore, Ruixin Bao, Samuel Giddins, Simon Stewart, Torgil Svensson, Ulf Adams, Vasilios Pantazopoulos, Wenyu Zhang, Yannic Bonenberger, yoav-steinberg.
+
+## Release 3.6.0 (2020-10-06)
+
+```
+Baseline: aa0d97c0bfc4c09ec6f45303aa80052ba28afbd9
+
+Cherry picks:
+
+   + 32c88da98f301333dc447b75564459165368d418:
+     Patch RuleContext for android_binary.deps to restore legacy
+     behavior.
+   + db9fc88fed387f09067a9250a731f8bf9ad74b05:
+     android_test also needs the legacy behavior in
+     RuleContext.getPrerequisites.
+   + 144d5149a0c50e464dd1be0769fed2ce33ab26a4:
+     Update android_sdk_repository to create a valid, but useless,
+     repository
+   + bb11f9235da52eb3b3e462ce0286f1a89188cb89:
+     Patch upb to fix build error with gcc 10
+   + 9f06be482aea3fcadeaf8fca6e48b32f224eba2e:
+     Patch upb to fix build error with gcc 10 (third_party)
+   + b67b75e3a62f5433d812993f3702f431b6967e86:
+     Fix issue where libtool_check_unique isn't found for sandbox
+     builds
+```
+
+Incompatible changes:
+
+  - `--experimental_ui_limit_console_output` is removed. Users of
+    `--experimental_ui_limit_console_output=1` for silencing terminal
+    output should use `--ui_event_filters=` instead.
+  - --proto:instantiation_stack must be enabled in addition to
+    --record_rule_instantiation_callstack to see call stack in proto
+    output from blaze query.
+
+New features:
+
+  - cc_common.compile support for include_prefix/strip_include_prefix
+  - Multiplexed persistent workers: Use
+    --experimental_worker_max_multiplex_instances to configure the
+    number of WorkRequests that are sent concurrently to one worker
+    process. The --worker_max_instances flag will no longer be used
+    to determine max instances for multiplex workers, since the two
+    have different resource requirements. Multiplex workers will by
+    default have a max instances of 8.
+
+Important changes:
+
+  - The prelude file (//tools/build_rules:prelude_bazel) is now
+    processed as a Starlark module, rather than being sourced into
+    the BUILD file textually. This may cause slight breakages
+    depending on the content of the prelude file. (Use of the prelude
+    file is discouraged as it will be removed in the long term.)
+  - Removed --experimental_ignore_deprecated_instrumentation_spec and
+    cleaned up the old deprecated behavior.
+  - Added CODEBASE.md, a description of the Bazel codebase.
+  - Removed the flag --experimental_transparent_compression.
+  - Removed the flag --experimental_action_args.
+  - Stop needlessly parsing WORKSPACE files from external
+    repositories.
+  - Dot ('.') is now allowed in workspace names. See
+    https://github.com/bazelbuild/bazel/issues/11837.
+  - This change can cause memory and performance regressions for some
+    builds with C++ dependencies, due to extra actions being executed.
+    RELNOTES: None
+  - Building Android apps for legacy multi-dex (pre-L) now require a
+    main-dex list if the application does not fit into a single DEX
+    file.
+  - Puts the experimental_worker_multiplex flag to use.
+  - In Starlark, the Args object supports a new parameter file format
+    'flag_per_line', compatible with the Abseil flags library.
+  - The flag --incompatible_no_support_tools_in_action_inputs is
+    removed.
+  - Support for NDK 21 added
+  - Bazel will now skip printing action stdout/stderr contents if
+    they exceed --experimental_ui_max_stdouterr_memory_bytes.
+  - The Starlark interpreter now correctly emits an error
+     if the operand of the first loop in a list comprehension
+     refers to a variable bound by a later loop, such as y in
+     this example:
+       [e1 for x in f(y) in e2 for y in e3] # error: undefined y
+                      ^
+     This may cause latent dynamic errors to become static errors.
+  - Added support for a 'supports-graceful-termination' execution
+    requirement and tag, which causes Bazel to send a SIGTERM to any
+    tagged
+    actions before sending a delayed SIGKILL. This is to give
+    actions, and more
+    specifically tests, a chance to clean up after themselves.
+  - Non-android targets can again be built when
+    android_sdk_repository is present but invalid.
+
+This release contains contributions from many people at Google, as well as Benjamin Peterson, Daniel Wagner-Hall, Dave MacLachlan, David Ostrovsky, Emil Kattainen, George Gensure, Greg Estren, Keith Smiley, mai12, Mai Hussien, Michael Eisel, Per Halvor Tryggeseth, Ruixin Bao, Samuel Giddins, Steeve Morin, Thi Doan, Tom de Goede, Ulf Adams, Zhongpeng Lin.
+
+## Release 3.5.0 (2020-09-02)
+
+```
+Baseline: 889bc0b523b47eeb38a72bf9bb6858ee525a7c7e
+
+Cherry picks:
+
+   + a7a0d48fbeb059ee60e77580e5d05baeefdd5699:
+     Make no-op starlark transition not affect the output directory.
+   + b37c51c7085f0aefe04034dd451acb847605ddb5:
+     Add include_prefix and strip_include_prefix to cc_common.compile
+   + f6ad35fcde93f92c591778ed7db38d167f5bbc03:
+     Delete --experimental_transparent_compression
+   + 39bc97eab295bddb35b38bfc4a2ff3d2b15d034e:
+     Remove --experimental_action_args
+   + b9706675a7abf6ceebb250f0b3dfa4087a0c35f6:
+     Stop needlessly parsing WORKSPACE files from external
+     repositories.
+   + e574d558da17cfd0f818e7a937a07926aa270069:
+     Allow hyphen char in workspace name
+   + 9993785fa0c4fa4172aa31d306f3abea76833abf:
+     Allow dot ('.') in workspace names.
+```
+
+New features:
+
+  - cc_common.compile support for include_prefix/strip_include_prefix
+
+Important changes:
+
+  - Removed the flag --experimental_transparent_compression.
+  - Removed the flag --experimental_action_args.
+  - Stop needlessly parsing WORKSPACE files from external
+    repositories.
+  - Dot ('.') is now allowed in workspace names. See
+    https://github.com/bazelbuild/bazel/issues/11837.
+
+This release contains contributions from many people at Google, as well as David Ostrovsky.
+
+## Release 3.5.0 (2020-09-02)
+
+```
+Baseline: 889bc0b523b47eeb38a72bf9bb6858ee525a7c7e
+
+Cherry picks:
+
+   + d6b9469efebd200a39d7fd43876a18822fcdbe7b:
+     Make no-op starlark transition not affect the output directory.
+   + b37c51c7085f0aefe04034dd451acb847605ddb5:
+     Add include_prefix and strip_include_prefix to cc_common.compile
+   + 0ebb1d5a5388109e3f026a355c77fdf0121f3a43:
+     Delete --experimental_transparent_compression
+   + 312e121c70aebfaa91b0a3106fa964e0bc12d1df:
+     Remove --experimental_action_args
+   + 7e6e855bb82734f582e03c2c7fad3148c139d0e0:
+     Stop needlessly parsing WORKSPACE files from external
+     repositories.
+   + d4049f6f85efb8f48d1f6b72764115af5b184831:
+     Allow hyphen char in workspace name
+   + 0a35be1843a2e4d49d5e5c3893cd6673705b7fb1:
+     Allow dot ('.') in workspace names.
+```
+
+Incompatible changes:
+
+  - The --experimental_process_wrapper_wait_fix flag (used
+    purely to roll out a risky bug fix) has been removed.
+  - Removed the --experimental_ui_deduplicate flag.
+  - Bazel now correctly prefers Xcode versions in `/Applications`
+    over any other paths, which resolves an issue with accidentally
+    picking up an Xcode version from a Time Machine backup or network
+    disk. In the improbable case that you relied on the old behavior
+    and Bazel now picks up Xcode from the wrong location, you can fix
+    it by moving that Xcode version to /Applications.
+
+New features:
+
+  - cquery now follows aspects with --include_aspects.
+  - cc_common.compile support for include_prefix/strip_include_prefix
+
+Important changes:
+
+  - Add support to bazel/crosstool for building arm64 on macos aka
+    darwin
+  - Add opt in 'oso_prefix_is_pwd' feature for Apple builds
+  - Add InstrumentedFilesInfo provider to Starlark globals.
+  - Fixed resource shrinking when <overlayable/> tags are used.
+  - Remove old incompatible flag
+    --incompatible_symlinked_sandbox_expands_tree_artifacts_in_runfile
+    s_tree.
+  - Update coverage configuration for Python, filegroup, and shell
+    script rules to distinguish between source and dependency
+    attributes.
+  - Add support to bazel/crosstool for building arm64e on macos aka
+    darwin
+  - Make filegroup always forward InstrumentedFilesProvider and not
+    collect any sources directly.
+  - Support signing key rotation in android_binary
+  - Remove legacy handling of --extra_checks
+  - Support signing key rotation in android_binary
+    GO...
+  - `--apple_bitcode` now takes an optional platform and only applies
+    the Bitcode mode to that platform if present. The option may be
+    provided multiple times.
+  - Support signing key rotation in android_binary
+  - NS_BLOCK_ASSERTIONS is now passed for all Apple architectures.
+  - Major changes to reporting of Starlark errors and the call stack.
+    (Please be alert to possible regressions, such as errors that
+    lack relevant location information.)
+  - Removed the flag --experimental_transparent_compression.
+  - Removed the flag --experimental_action_args.
+  - Stop needlessly parsing WORKSPACE files from external
+    repositories.
+  - Dot ('.') is now allowed in workspace names. See
+    https://github.com/bazelbuild/bazel/issues/11837.
+
+This release contains contributions from many people at Google, as well as Adam Gross, Andrew Suffield, Benjamin Peterson, bnczk, David Ostrovsky, Ed Schouten, Greg Estren, Grzegorz Lukasik, Holger Freyther, Kalle Johansson, Keith Smiley, Kerrick Staley, Kyle Teske, Mostyn Bramley-Moore, Ryan Beasley, Ryan Pavlik, Siggi Simonarson, Stiopa Koltsov, Ulf Adams, Xiaoyi Shi, Yannic Bonenberger, Yesudeep Mangalapilly.
+
+## Release 3.4.1 (2020-07-14)
+
+```
+Baseline: 7404d17ac76da876ae0b432d1fccf222a9e991fe
+
+Cherry picks:
+
+   + f31f2d787116120b2b16e9aa9a64fab171c0d954:
+     fixup! Gracefully handle the lack of subreaper support in Linux.
+   + 3a4f221e3c57495c1ed0d1ec8128f92323b13079:
+     Revert "Replace the remaining dependencies for Bazel Debian
+     build (third_party)"
+   + c55ec0f2cb3f5b44e5025bf9d3c5dc91d94db287:
+     Revert "Upgrade gRPC to 1.26.0"
+```
+
+This release contains contributions from many people at Google, as well as Ryan Beasley.
+
+## Release 3.4.0 (2020-07-13)
+
+```
+Baseline: 7404d17ac76da876ae0b432d1fccf222a9e991fe
+
+Cherry picks:
+
+   + a4334be50a206bf8d676a0196af11056c48ac35b:
+     fixup! Gracefully handle the lack of subreaper support in Linux.
+```
+
+Incompatible changes:
+
+  - This removes the short-lived --process_wrapper_extra_flags
+    flag, which was introduced primarily to roll out a bug fix.
+    Unfortunately,
+    this made us inadvertently expose all of the process-wrapper's
+    command line
+    interface to the public, which should not have happened.  Given
+    the corner
+    case of the utility of this flag, the lack of documentation for
+    it, and the
+    fact that it only appeared in a single release, we are treating
+    this as a
+    bug instead of a backwards compatibility breakage.
+
+New features:
+
+  - bazel info: Allow to specify multiple keys.
+  - Support code coverage with GCC 9.
+
+Important changes:
+
+  - Allow InstrumentedFilesInfo fields to be read from Starlark.
+  - The --starlark_cpu_profile=<file> flag writes a profile in
+    pprof format containing a statistical summary of CPU usage
+    by all Starlark execution during the bazel command. Use it
+    to identify slow Starlark functions in loading and analysis.
+  - The --debug_depset_flag has been removed as it is in effect
+    always on at no cost.
+  - Rule authors should use the
+    incompatible_use_toolchain_transition rule attribute to migrate
+    to using
+    the toolchain transition. jcater to udpate notes further.
+  - `apple_binary` rules now accept the `stamp` attribute with the
+    same
+    semantics that it has in `cc_binary` rules.
+  - --incompatible_objc_provider_remove_compile_info turns off
+    the compile info/mege_zip Starlark APIs in ObjcProvider.  See
+    #11359.
+  - The --debug_depset_flag has been removed as it is in effect
+    always on at no cost.
+  - Fix behavior of ctx.actions.write so content is written without
+    an incorrect encoding to UTF-8.
+    See https://github.com/bazelbuild/bazel/issues/10174 for details.
+  - Collect more performance metrics for worker execution.
+  - Add flag --incompatible_force_strict_header_check_from_starlark
+  - Configure coverage and runfiles for sh_library.
+  - Adds --incompatible_blacklisted_protos_requires_proto_info to
+    indicate whether proto_lang_toolchain.blacklisted_protos requires
+    ProtoInfo.
+
+This release contains contributions from many people at Google, as well as Andrzej Guszak, Benjamin Peterson, Benjamin Romano, Carlos Eduardo Seo, Claudio Bley, dannysullivan, David Ostrovsky, George Gensure, Graham Jenson, Grzegorz Lukasik, Gunnar Wagenknecht, Henk van der Laan, Jin, John Millikin, Marin Baron, Nikhil Marathe, Robin Nabel, Ryan Beasley, Samuel Giddins, Sergey Balabanov, utsav-dbx, Vo Van Nghia, Yannic Bonenberger.
+
+## Release 3.3.1 (2020-06-30)
+
+```
+Baseline: c063b5caf776dee665497b64c5c17d4ed7e6750a
+
+Cherry picks:
+
+   + cb798a475eb54087e1e83f8aa1dc1c54550877b5:
+     Restore missing Building with Platforms docs.
+   + 9be97678b02bbd45d164c8458c8fd4f7791cb7aa:
+     Release 3.3.0 (2020-06-17)
+   + 3b0439e37247a480e08337a6314d06231bdbafd3:
+     Fix incorrect assumption of desugar persistent worker conditional
+```
+
+This release contains contributions from many people at Google, as well as .
+
+## Release 3.3.0 (2020-06-17)
+
+```
+Baseline: c063b5caf776dee665497b64c5c17d4ed7e6750a
+
+Cherry picks:
+
+   + 23bd69d7499de097b15e6025cc0796bdbc9886b8:
+     Restore missing Building with Platforms docs.
+```
+
+Incompatible changes:
+
+  - The startup option --fatal_event_bus_exceptions is now a no-op
+    and will be removed soon.
+
+New features:
+
+  - Bazel offers basic completion for the fish shell.
+
+Important changes:
+
+  - Add configuration_field for --custom_malloc to cpp config fragment
+  - Flip --incompatible_objc_compile_info_migration to true.  See
+    #10854.
+  - It is now possible to use different action mnemonics while still
+    sharing the same pool of persistent workers. It requires setting
+    a new property
+    on the execution requirements (`worker-key-mnemonic`). The value
+    overrides
+    the action's mnemonic when it comes to reusing worker processes.
+  - linkshared=1 in cc_binary no longer requires '.so' or '.dll' in
+    the target name
+  - Revert --incompatible_objc_compile_info_migration to false.  See
+    #10854.
+  - Invoke clang with the correct -target flag when building for
+    watchOS.
+  - NA
+  - Add experiment flag to forward InstrumentedFilesInfo from
+    non-tool deps by default.
+
+This release contains contributions from many people at Google, as well as Abhishek Kumar, Adam Azarchs, Akira Baruah, Daniel Wagner-Hall, Derek Argueta, glukasiknuro, Greg Estren, Greg, Jason Furmanek, Jiri Dank, Keith Smiley, Kseniia Vasilchuk, Laurent Le Brun, Matt Mackay, Michael Klemm, Nikolay Shelukhin, Patrick Balestra, Rui Chen, Siggi Simonarson, sventiffe, Tobias Werth, Tom de Goede, Vladimir Chebotarev, Yannic Bonenberger.
+
+## Release 3.2.0 (2020-05-27)
+
+```
+Baseline: 1d93d26d9900328dcba0026bf21cb45cc37a4596
+```
+
+Important changes:
+
+  - Renamed --experimental_slim_json_profile to --slim_profile.
+  - Expose ctx.attr.write Args content for analysistest when possible
+  - Added aquery_differ_v2 that works with the new aquery proto
+    output format.
+  - Add new flag, 'experimental_no_product_name_out_symlink', to omit
+    creating '<product>-out' symlink if user specifies
+    '--symlink_prefix' option.
+  - --ram_utilization_factor is removed (as is
+    --incompatible_remove_ram_utilization_factor). Please use
+    --local_ram_resources.
+  - Improve include scanner support for cl.exe and clang-cl command
+    lines
+  - ctx.split_attr now includes attributes with Starlark split
+    transitions.
+  - Added --incompatible_string_replace_count, to make
+    string.replace() behave as in Python.
+  - Bazel can now recursively delete non-executable but readable
+    directories.
+  - Restore case-sensitivity to -I and /I include scanning detection
+    to avoid conflicts.
+
+This release contains contributions from many people at Google, as well as Alessandro Patti, Antoine Eiche, Beebs, Brian Silverman, George Gensure, Gerhard Pretorius, Gibson Fahnestock, Greg, Gregor Jasny, Gustav Westling, hannometer, Jin, Jonathan Gerrish, Josh Smith, Justin Y Wei, Laurent Le Brun, Links, liubang, Lszl Csomor, Matt Mackay, Moritz Krger, Ryan Beasley, Siddhartha Bagaria, Yannic Bonenberger, Yannic, Zhongpeng Lin.
+
+## Release 3.1.0 (2020-04-21)
+
+```
+Baseline: 17ebbf15bea3733c0c21e0376fb5906e391edb49
+
+Cherry picks:
+
+   + 71fb56b4bb669a419f473598c8722e125dbb5c9e:
+     Suppress last-ditch download exceptions w/cleanup
+   + fd60614c38da0db22431d91a793423904dff801f:
+     In repo rules, don't warn about generator_* attributes being
+     non-canonical
+   + 2a372792f5cc09bd0e8389d5fc4bbfdd2f5d6e37:
+     Refactor configureFeatures and prevent NPE
+   + 777a6ee6ed95cae4ddb949d52b63ee8a66024f03:
+     Automated rollback of commit
+     0bbe38176e15d891a4e4cab2d8425e292de6cc5f.
+   + 2ee53c9267eb6de8eae109950ca8f3953bf1ae66:
+     Guard parseActionResultMetadata with bulk wrapper
+```
+
+Incompatible changes:
+
+  - The deprecated startup options
+    --experimental_oom_more_eagerly(_threshold) are removed.
+
+Important changes:
+
+  - Remove flag
+    --incompatible_load_proto_toolchain_for_javalite_from_com_google_p
+    rotobuf which has been flipped in Bazel 3.0.
+  - Allow assembly file sources in cc_common.compile.
+  - Set default .netrc file on Windows to %USERPROFILE%
+  - A maximum 150 attributes per RuleClass is enforced
+  - Increase max targets per rule class limit to 200
+  - ctx.split_attr now includes attributes with Starlark split
+    transitions.
+  - The --max_computation_steps flag bounds the computation done by a
+    BUILD file.
+  - Native patch can handle file permission properly
+  - Aspects may now propagate through dependencies on rule outputs by
+    being defined with `apply_to_generating_rules = True`.
+  - 'query --output=build' now shows where rule classes (not just
+    rules) are created.
+  - The flag `incompatible_bzl_disallow_load_after_statement` is
+    removed.
+  - ctx.split_attr now includes attributes with Starlark split
+    transitions.
+  - The flag `incompatible_no_output_attr_default` is removed.
+  - Fix wall-time of the SpawnResult in WorkerSpawnRunner
+  - Add stamp parameter for cc_common.link to enable including build
+    info
+  - The flag `--incompatible_restrict_named_params` is removed.
+  - The flag `--incompatible_depset_union` is removed.
+  - Bazel uses fewer compiler flags by default when building
+    Objective-C. In
+    particular, Bazel no longer sets `-O0`, `-DDEBUG=1`,
+    `-fstack-protector`, `-fstack-protector-all`, or `-g` in dbg
+    mode, and
+    Bazel no longer sets `-Os`, `-DNDEBUG=1`, `-Wno-unused-variable`,
+    `-Winit-self`, or `-Wno-extra` in opt mode. If you want to apply
+    these
+    flags to your project, you can reenable them in your CROSSTOOL.
+  - A maximum attribute name length is 128 is enforced
+
+This release contains contributions from many people at Google, as well as Alessandro Patti, Benjamin Peterson, Benjamin Romano, Bor Kae Hwang, Chris Heisterkamp, Cristian Hancila, Dmitri G, Douglas Parker, George Gensure, Gregor Jasny, John Millikin, Keith Smiley, Leo, Mike Fourie, Patrick Balestra, Robbert Van Ginkel, Ryota, Samuel Giddins, Ulf Adams, Ulf Adams, Vertexwahn, Xavier Bonaventura, Yannic Bonenberger.
+
+## Release 3.0.0 (2020-04-06)
+
+```
+Baseline: 3c7cc747ac653dca8b88a9e43726a794e2c27a9c
+
+Cherry picks:
+
+   + 19e214b44df9c82a8a3bd3381344f7145813c572:
+     Use prefix encoding for paths.
+   + 63b01f7b1cd6603a08bf2a8ae813388c201e3448:
+     Avoid file operations in the sandbox creation critical path.
+   + 80a2d7cc5f8a22816934dcd2ca9bdf87050f3d9f:
+     Implementation (but not plumbing) of the gRPC remote downloader
+   + 586eabf419972c74fdd5fef328cfe9a259e035ed:
+     Implement RemoteDownloader w/ `--experimental_remote_downloader`
+```
+
+Incompatible changes:
+
+  - Flip --incompatible_remove_enabled_toolchain_types, so that rules
+    can no longer access enabled toolchain types from the platform
+    fragment.
+  - The --incompatible_use_jdk11_as_host_javabase flag has been
+    removed (it was flipped in Bazel 0.25.0).
+  - Using JDK 9 or 10 as a `--host_javabase` is no longer officially
+    supported. As always, you can use the
+    `@bazel_tools//tools/jdk:toolchain_vanilla` Java toolchain to use
+    older or newer JDKs than what Bazel currently supports.
+  - --fatal_event_bus_exceptions is deprecated and should not be
+    used. Any crashes should be reported so that they can be fixed.
+  - The old-style binary profile format is no longer suppported, use
+    the new JSON trace profile instead.
+
+Important changes:
+
+  - Improve the performance of creating a sandboxed execution root
+    for workers when the number of inputs is large (>1000).
+  - Treat .cu and .cl files as C++ source. CUDA or OpenCL are not
+    natively supported and will require custom flags to compile with
+    e.g. clang.
+  - Add actions' primary output details in JSON profile and
+    analysis_v2.proto.
+  - Add --cds_archive option for embedding CDS archive into deploy
+    JAR.
+  - Add new global attribute: applicable_licenses
+    - Package level default with default_applicable_licenses
+    - guarded by --incompatible_applicable_licenses (default true for
+    Blaze, false for Bazel)
+    - In support of
+    https://docs.google.com/document/d/1uwBuhAoBNrw8tmFs-NxlssI6VRolid
+    GYdYqagLqHWt8/edit#
+  - Non-test Java rules no longer require the TestConfiguration and
+    thus --trim_test_configuration is again usable for Java builds
+  - The flag `--incompatible_always_check_depset_elements` is enabled
+    by default.
+  - --incompatible_objc_compile_info_migration determines
+    whether native rules can assume compile info has been migrated to
+    CcInfo. See https://github.com/bazelbuild/bazel/issues/10854.
+  - --incompatible_remove_local_resources is true by default. Please
+    use --local_ram_resources and --local_cpu_resources instead of
+    --local_resources.
+
+This release contains contributions from many people at Google, as well as Alessandro Patti, Benjamin Peterson, Christy Norman, Dave hughes, David Haxton, David Neil, garyschulte, George Chiramel, George Gensure, Gibson Fahnestock, Greg Estren, Greg, Jason Hoch, Jin, John Millikin, Jonathan Springer, Keith Smiley, Laurent Le Brun, Ulf Adams, Yannic Bonenberger, Yannic, Yihong Wang, Yuchen Dai.
+
+## Release 2.2.0 (2020-03-03)
+
+```
+Baseline: 78055efad0917b848078bf8d97b3adfddf91128d
+```
+
+Incompatible changes:
+
+  - The --[no]incompatible_windows_bashless_run_command flag is no
+    longer supported. It was flipped in Bazel 1.0
+  - The --[no]incompatible_windows_native_test_wrapper flag is no
+    longer supported. It was flipped in Bazel 1.0
+
+Important changes:
+
+  - Consistent target naming style in example target names.
+  - cquery's config() now supports arbitrary configurations.
+  - The flag --incompatible_disallow_dict_lookup_unhashable_keys is
+    removed.
+  - Include target label in Python version error message.
+  - The flag --incompatible_remap_main_repo is removed.
+  - Windows: we now discourage running Bazel from MSYS2 because of a
+    newly found bug (#10573)
+  - Reduced the packaging time (`package-bazel.sh`) for the
+    `//src:bazel-dev` Bazel development build target from 14s to 6s.
+    Use `//src:bazel-dev` if you're iterating rapidly on a local
+    Bazel changes, and use `//src:bazel --compilation_mode=opt` for
+    release builds.
+  - cquery: "//foo:bar" now means "all configured targets with label
+    //foo:bar" instead of "choose an arbitrary configured target with
+    label //foo:bar". See cquery docs for details.
+  - WORKSPACE and BUILD.bazel files of http_archive repositories can
+    now be patched using the "patch_cmds" and "patches" attributes.
+  - Actions with "parse" on the critical path should no longer finish
+    in the future.
+  - Flags that affect external repositories like
+    "--override_repository" can now be addressed in bazelrc files
+    using the "common" command, without causing commands like "bazel
+    shutdown" to fail.
+  - The flag --incompatible_disallow_unverified_http_downloads is
+    removed.
+  - Create the incompatibleApplicableLicenses flag.
+    We plan to flip this from false to true in Bazel 4.x.
+    Implementation to follow.
+  - Treat .cu and .cl files as C++ source. CUDA or OpenCL are not
+    natively supported and will require custom flags to compile with
+    e.g. clang.
+  - Treat .cu and .cl files as C++ source. CUDA or OpenCL are not
+    natively supported and will require custom flags to compile with
+    e.g. clang.
+  - The --starlark_cpu_profile=<file> flag writes a profile in
+    pprof format containing a statistical summary of CPU usage
+    by all Starlark execution during the bazel command. Use it
+    to identify slow Starlark functions in loading and analysis.
+  - --ram_utilization_factor will be deprecated. Please use
+    --local_ram_resources=HOST_RAM*<float>
+  - Docs: glob() documentation is rewritten, and now it points out a
+    pitfall of rules shadowing glob-matched files.
+
+This release contains contributions from many people at Google, as well as Alessandro Patti, Alex Kirchhoff, aman, Artur Dryomov, Benjamin Peterson, Benjamin Peterson, David Ostrovsky, Elliotte Rusty Harold, Eric Klein, George Chiramel, George Gensure, Guillaume Bouchard, Hui-Zhi, John Millikin, Jonathan Springer, Laurent Le Brun, Michael McLoughlin, nikola-sh, Nikolaus Wittenstein, Nikolay Shelukhin, Yannic Bonenberger, Yannic.
+
 ## Release 2.1.0 (2020-02-07)
 
 ```

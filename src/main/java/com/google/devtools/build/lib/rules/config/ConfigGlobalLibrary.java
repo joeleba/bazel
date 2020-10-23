@@ -14,24 +14,25 @@
 
 package com.google.devtools.build.lib.rules.config;
 
-import static com.google.devtools.build.lib.analysis.skylark.FunctionTransitionUtil.COMMAND_LINE_OPTION_PREFIX;
+import static com.google.devtools.build.lib.analysis.starlark.FunctionTransitionUtil.COMMAND_LINE_OPTION_PREFIX;
 
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.config.StarlarkDefinedConfigTransition;
-import com.google.devtools.build.lib.analysis.skylark.StarlarkTransition.Settings;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition.Settings;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigGlobalLibraryApi;
-import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigurationTransitionApi;
-import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.starlarkbuildapi.config.ConfigGlobalLibraryApi;
+import com.google.devtools.build.lib.starlarkbuildapi.config.ConfigurationTransitionApi;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /**
  * Implementation of {@link ConfigGlobalLibraryApi}.
@@ -42,18 +43,22 @@ public class ConfigGlobalLibrary implements ConfigGlobalLibraryApi {
 
   @Override
   public ConfigurationTransitionApi transition(
-      BaseFunction implementation,
+      StarlarkCallable implementation,
       Sequence<?> inputs, // <String> expected
       Sequence<?> outputs, // <String> expected
       StarlarkThread thread)
       throws EvalException {
     StarlarkSemantics semantics = thread.getSemantics();
-    List<String> inputsList = inputs.getContents(String.class, "inputs");
-    List<String> outputsList = outputs.getContents(String.class, "outputs");
+    List<String> inputsList = Sequence.cast(inputs, String.class, "inputs");
+    List<String> outputsList = Sequence.cast(outputs, String.class, "outputs");
     validateBuildSettingKeys(
-        inputsList, Settings.INPUTS, semantics.experimentalStarlarkConfigTransitions());
+        inputsList,
+        Settings.INPUTS,
+        semantics.getBool(BuildLanguageOptions.EXPERIMENTAL_STARLARK_CONFIG_TRANSITIONS));
     validateBuildSettingKeys(
-        outputsList, Settings.OUTPUTS, semantics.experimentalStarlarkConfigTransitions());
+        outputsList,
+        Settings.OUTPUTS,
+        semantics.getBool(BuildLanguageOptions.EXPERIMENTAL_STARLARK_CONFIG_TRANSITIONS));
     return StarlarkDefinedConfigTransition.newRegularTransition(
         implementation, inputsList, outputsList, semantics, thread);
   }
@@ -64,7 +69,7 @@ public class ConfigGlobalLibrary implements ConfigGlobalLibraryApi {
       StarlarkThread thread)
       throws EvalException {
     Map<String, Object> changedSettingsMap =
-        changedSettings.getContents(String.class, Object.class, "changed_settings dict");
+        Dict.cast(changedSettings, String.class, Object.class, "changed_settings dict");
     validateBuildSettingKeys(changedSettingsMap.keySet(), Settings.OUTPUTS, true);
     return StarlarkDefinedConfigTransition.newAnalysisTestTransition(
         changedSettingsMap, thread.getCallerLocation());

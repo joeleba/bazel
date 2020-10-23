@@ -17,8 +17,8 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.DeterministicWriter;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -33,6 +33,7 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import javax.annotation.Nullable;
 
 /**
  * An action that writes the a parameter file to {@code incremental_install.py} based on the command
@@ -57,13 +58,12 @@ public final class WriteAdbArgsAction extends AbstractFileWriteAction {
     public String adb;
 
     @Option(
-      name = "adb_arg",
-      allowMultiple = true,
-      defaultValue = "",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-      effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
-      help = "Extra arguments to pass to adb. Usually used to designate a device to install to."
-    )
+        name = "adb_arg",
+        allowMultiple = true,
+        defaultValue = "null",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {OptionEffectTag.ACTION_COMMAND_LINES},
+        help = "Extra arguments to pass to adb. Usually used to designate a device to install to.")
     public List<String> adbArgs;
 
     @Option(
@@ -122,8 +122,7 @@ public final class WriteAdbArgsAction extends AbstractFileWriteAction {
   }
 
   @Override
-  public DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx)
-      throws IOException, InterruptedException, ExecException {
+  public DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx) {
     Options options = ctx.getOptions().getOptions(Options.class);
     final List<String> args = new ArrayList<>(options.adbArgs);
     final String adb = options.adb;
@@ -180,7 +179,10 @@ public final class WriteAdbArgsAction extends AbstractFileWriteAction {
   }
 
   @Override
-  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+  protected void computeKey(
+      ActionKeyContext actionKeyContext,
+      @Nullable Artifact.ArtifactExpander artifactExpander,
+      Fingerprint fp) {
     fp.addString(GUID);
   }
 

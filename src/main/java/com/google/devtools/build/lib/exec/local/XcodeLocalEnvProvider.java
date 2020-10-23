@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.exec.local;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.DottedVersion;
@@ -31,7 +32,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.logging.Logger;
 
 /**
  * Adds to the given environment all variables that are dependent on system state of the host
@@ -46,7 +46,7 @@ import java.util.logging.Logger;
  */
 public final class XcodeLocalEnvProvider implements LocalEnvProvider {
 
-  private static final Logger log = Logger.getLogger(XcodeLocalEnvProvider.class.getName());
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
 
   private final Map<String, String> clientEnv;
 
@@ -66,7 +66,8 @@ public final class XcodeLocalEnvProvider implements LocalEnvProvider {
 
   @Override
   public ImmutableMap<String, String> rewriteLocalEnv(
-      Map<String, String> env, BinTools binTools, String fallbackTmpDir) throws IOException {
+      Map<String, String> env, BinTools binTools, String fallbackTmpDir)
+      throws IOException, InterruptedException {
     boolean containsXcodeVersion = env.containsKey(AppleConfiguration.XCODE_VERSION_ENV_NAME);
     boolean containsAppleSdkVersion =
         env.containsKey(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME);
@@ -125,10 +126,8 @@ public final class XcodeLocalEnvProvider implements LocalEnvProvider {
    *     issue finding or running the tool
    */
   private static String querySdkRoot(
-      String developerDir,
-      String sdkVersion,
-      String appleSdkPlatform)
-      throws IOException {
+      String developerDir, String sdkVersion, String appleSdkPlatform)
+      throws IOException, InterruptedException {
     try {
       String sdkString = appleSdkPlatform.toLowerCase() + sdkVersion;
       Map<String, String> env =
@@ -190,21 +189,36 @@ public final class XcodeLocalEnvProvider implements LocalEnvProvider {
    *     issue finding or running the tool
    */
   private static String getSdkRoot(String developerDir, String sdkVersion, String appleSdkPlatform)
-      throws IOException {
+      throws IOException, InterruptedException {
     try {
       return sdkRootCache.computeIfAbsent(
           developerDir + ":" + appleSdkPlatform.toLowerCase() + ":" + sdkVersion,
           (key) -> {
             try {
               String sdkRoot = querySdkRoot(developerDir, sdkVersion, appleSdkPlatform);
-              log.info("Queried Xcode SDK root with key " + key + " and got " + sdkRoot);
+              logger.atInfo().log("Queried Xcode SDK root with key %s and got %s", key, sdkRoot);
               return sdkRoot;
             } catch (IOException e) {
               throw new UncheckedIOException(e);
+            } catch (InterruptedException e) {
+              throw new UncheckedInterruptedException(e);
             }
           });
     } catch (UncheckedIOException e) {
       throw e.getCause();
+    } catch (UncheckedInterruptedException e) {
+      throw e.getCause();
+    }
+  }
+
+  private static final class UncheckedInterruptedException extends RuntimeException {
+    UncheckedInterruptedException(InterruptedException e) {
+      super(e);
+    }
+
+    @Override
+    public synchronized InterruptedException getCause() {
+      return (InterruptedException) super.getCause();
     }
   }
 
@@ -224,7 +238,7 @@ public final class XcodeLocalEnvProvider implements LocalEnvProvider {
    *     unexpected issue finding or running the tool
    */
   private static String queryDeveloperDir(BinTools binTools, DottedVersion version)
-      throws IOException {
+      throws IOException, InterruptedException {
     String xcodeLocatorPath = binTools.getEmbeddedPath("xcode-locator").getPathString();
     try {
       CommandResult xcodeLocatorResult =
@@ -283,20 +297,25 @@ public final class XcodeLocalEnvProvider implements LocalEnvProvider {
    *     unexpected issue finding or running the tool
    */
   private static String getDeveloperDir(BinTools binTools, DottedVersion version)
-      throws IOException {
+      throws IOException, InterruptedException {
     try {
       return developerDirCache.computeIfAbsent(
           version.toString(),
           (key) -> {
             try {
               String developerDir = queryDeveloperDir(binTools, version);
-              log.info("Queried Xcode developer dir with key " + key + " and got " + developerDir);
+              logger.atInfo().log(
+                  "Queried Xcode developer dir with key %s and got %s", key, developerDir);
               return developerDir;
             } catch (IOException e) {
               throw new UncheckedIOException(e);
+            } catch (InterruptedException e) {
+              throw new UncheckedInterruptedException(e);
             }
           });
     } catch (UncheckedIOException e) {
+      throw e.getCause();
+    } catch (UncheckedInterruptedException e) {
       throw e.getCause();
     }
   }

@@ -88,10 +88,17 @@ std::unique_ptr<CommandLine> OptionProcessor::SplitCommandLine(
   vector<string>::size_type i = 1;
   while (i < args.size() && IsArg(args[i])) {
     string& current_arg = args[i];
+
+    bool is_nullary;
+    if (!startup_options_->MaybeCheckValidNullary(current_arg, &is_nullary,
+                                                  error)) {
+      return nullptr;
+    }
+
     // If the current argument is a valid nullary startup option such as
     // --master_bazelrc or --nomaster_bazelrc proceed to examine the next
     // argument.
-    if (startup_options_->IsNullary(current_arg)) {
+    if (is_nullary) {
       startup_args.push_back(current_arg);
       i++;
     } else if (startup_options_->IsUnary(current_arg)) {
@@ -271,7 +278,7 @@ blaze_exit_code::ExitCode ParseErrorToExitCode(RcFile::ParseError parse_error) {
 }
 
 void WarnAboutDuplicateRcFiles(const std::set<std::string>& read_files,
-                               const std::deque<std::string>& loaded_rcs) {
+                               const std::vector<std::string>& loaded_rcs) {
   // The first rc file in the queue is the top-level one, the one that would
   // have imported all the others in the queue. The top-level rc is one of the
   // default locations (system, workspace, home) or the explicit path passed by
@@ -406,8 +413,7 @@ blaze_exit_code::ExitCode OptionProcessor::GetRcFiles(
     }
 
     // Check that none of the rc files loaded this time are duplicate.
-    const std::deque<std::string>& sources =
-        parsed_rc->canonical_source_paths();
+    const auto& sources = parsed_rc->canonical_source_paths();
     internal::WarnAboutDuplicateRcFiles(read_files_canonical_paths, sources);
     read_files_canonical_paths.insert(sources.begin(), sources.end());
 
@@ -482,15 +488,20 @@ blaze_exit_code::ExitCode OptionProcessor::ParseOptions(
     }
   }
 
+  // The helpers expect regular pointers, not unique_ptrs.
+  std::vector<RcFile*> rc_file_ptrs;
+  rc_file_ptrs.reserve(rc_files.size());
+  for (auto& rc_file : rc_files) { rc_file_ptrs.push_back(rc_file.get()); }
+
   // Parse the startup options in the correct priority order.
   const blaze_exit_code::ExitCode parse_startup_options_exit_code =
-      ParseStartupOptions(rc_files, error);
+      ParseStartupOptions(rc_file_ptrs, error);
   if (parse_startup_options_exit_code != blaze_exit_code::SUCCESS) {
     return parse_startup_options_exit_code;
   }
 
   blazerc_and_env_command_args_ =
-      GetBlazercAndEnvCommandArgs(cwd, rc_files, GetProcessedEnv());
+      GetBlazercAndEnvCommandArgs(cwd, rc_file_ptrs, GetProcessedEnv());
   return blaze_exit_code::SUCCESS;
 }
 
@@ -532,20 +543,21 @@ void OptionProcessor::PrintStartupOptionsProvenanceMessage() const {
 }
 
 blaze_exit_code::ExitCode OptionProcessor::ParseStartupOptions(
-    const std::vector<std::unique_ptr<RcFile>> &rc_files,
-    std::string *error) {
+    const std::vector<RcFile*> &rc_files, std::string *error) {
   // Rc files can import other files at any point, and these imported rcs are
   // expanded in place. Here, we isolate just the startup options but keep the
   // file they came from attached for the option_sources tracking and for
   // sending to the server.
   std::vector<RcStartupFlag> rcstartup_flags;
 
-  for (const auto& blazerc : rc_files) {
+  for (const auto* blazerc : rc_files) {
     const auto iter = blazerc->options().find("startup");
     if (iter == blazerc->options().end()) continue;
 
     for (const RcOption& option : iter->second) {
-      rcstartup_flags.push_back({*option.source_path, option.option});
+      const std::string& source_path =
+          blazerc->canonical_source_paths()[option.source_index];
+      rcstartup_flags.push_back({source_path, option.option});
     }
   }
 
@@ -629,15 +641,15 @@ static std::vector<std::string> GetProcessedEnv() {
 // BlazeOptionHandler.INTERNAL_COMMAND_OPTIONS!
 std::vector<std::string> OptionProcessor::GetBlazercAndEnvCommandArgs(
     const std::string& cwd,
-    const std::vector<std::unique_ptr<RcFile>>& blazercs,
+    const std::vector<RcFile*>& blazercs,
     const std::vector<std::string>& env) {
   // Provide terminal options as coming from the least important rc file.
   std::vector<std::string> result = {
       "--rc_source=client",
       "--default_override=0:common=--isatty=" +
-          ToString(IsStandardTerminal()),
+          blaze_util::ToString(IsStandardTerminal()),
       "--default_override=0:common=--terminal_columns=" +
-          ToString(GetTerminalColumns())};
+          blaze_util::ToString(GetTerminalColumns())};
   if (IsEmacsTerminal()) {
     result.push_back("--default_override=0:common=--emacs");
   }
@@ -648,7 +660,7 @@ std::vector<std::string> OptionProcessor::GetBlazercAndEnvCommandArgs(
   // is reserved the "client" options created by this function.
   int cur_index = 1;
   std::map<std::string, int> rcfile_indexes;
-  for (const auto& blazerc : blazercs) {
+  for (const auto* blazerc : blazercs) {
     for (const std::string& source_path : blazerc->canonical_source_paths()) {
       // Deduplicate the rc_source list because the same file might be included
       // from multiple places.
@@ -661,16 +673,18 @@ std::vector<std::string> OptionProcessor::GetBlazercAndEnvCommandArgs(
   }
 
   // Add RcOptions as default_overrides.
-  for (const auto& blazerc : blazercs) {
+  for (const auto* blazerc : blazercs) {
     for (const auto& command_options : blazerc->options()) {
       const string& command = command_options.first;
       // Skip startup flags, which are already parsed by the client.
       if (command == "startup") continue;
 
       for (const RcOption& rcoption : command_options.second) {
+        const std::string& source_path =
+            blazerc->canonical_source_paths()[rcoption.source_index];
         std::ostringstream oss;
-        oss << "--default_override=" << rcfile_indexes[*rcoption.source_path]
-            << ':' << command << '=' << rcoption.option;
+        oss << "--default_override=" << rcfile_indexes[source_path] << ':'
+            << command << '=' << rcoption.option;
         result.push_back(oss.str());
       }
     }

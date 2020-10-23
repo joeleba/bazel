@@ -26,13 +26,18 @@ import java.util.Optional;
  * <p>https://docs.oracle.com/javase/specs/jvms/se11/html/jvms-4.html#jvms-4.7
  */
 @AutoValue
-public abstract class ClassAttributes implements TypeMappable<ClassAttributes> {
+public abstract class ClassAttributes
+    implements TypeMappable<ClassAttributes>, Comparable<ClassAttributes> {
 
   public abstract ClassName classBinaryName();
 
   public abstract Optional<ClassName> nestHost();
 
   public abstract ImmutableSet<ClassName> nestMembers();
+
+  public abstract ImmutableSet<MethodKey> privateInstanceMethods();
+
+  public abstract ImmutableSet<MethodKey> desugarIgnoredMethods();
 
   // Include other class attributes as necessary.
 
@@ -48,8 +53,19 @@ public abstract class ClassAttributes implements TypeMappable<ClassAttributes> {
       mappedBuilder.setNestHost(nestHost().get().acceptTypeMapper(typeMapper));
     }
     nestMembers().stream().map(typeMapper::map).forEach(mappedBuilder::addNestMember);
+    privateInstanceMethods().stream()
+        .map(methodKey -> methodKey.acceptTypeMapper(typeMapper))
+        .forEach(mappedBuilder::addPrivateInstanceMethod);
+    desugarIgnoredMethods().stream()
+        .map(methodKey -> methodKey.acceptTypeMapper(typeMapper))
+        .forEach(mappedBuilder::addDesugarIgnoredMethods);
     mappedBuilder.setClassBinaryName(classBinaryName().acceptTypeMapper(typeMapper));
     return mappedBuilder.build();
+  }
+
+  @Override
+  public int compareTo(ClassAttributes other) {
+    return classBinaryName().compareTo(other.classBinaryName());
   }
 
   /** The builder of {@link ClassAttributes}. */
@@ -62,8 +78,22 @@ public abstract class ClassAttributes implements TypeMappable<ClassAttributes> {
 
     abstract ImmutableSet.Builder<ClassName> nestMembersBuilder();
 
+    abstract ImmutableSet.Builder<MethodKey> privateInstanceMethodsBuilder();
+
+    abstract ImmutableSet.Builder<MethodKey> desugarIgnoredMethodsBuilder();
+
     public ClassAttributesBuilder addNestMember(ClassName nestMember) {
       nestMembersBuilder().add(nestMember);
+      return this;
+    }
+
+    public ClassAttributesBuilder addPrivateInstanceMethod(MethodKey methodKey) {
+      privateInstanceMethodsBuilder().add(methodKey);
+      return this;
+    }
+
+    public ClassAttributesBuilder addDesugarIgnoredMethods(MethodKey methodKey) {
+      desugarIgnoredMethodsBuilder().add(methodKey);
       return this;
     }
 

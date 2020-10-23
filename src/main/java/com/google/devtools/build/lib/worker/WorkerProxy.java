@@ -14,9 +14,11 @@
 
 package com.google.devtools.build.lib.worker;
 
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxInputs;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers.SandboxOutputs;
+import com.google.devtools.build.lib.shell.Subprocess;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkRequest;
@@ -24,12 +26,12 @@ import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Set;
-import java.util.logging.Logger;
 
+// TODO(karlgray): Refactor WorkerProxy so that it does not inherit from class Worker.
 /** A proxy that talks to the multiplexer */
 final class WorkerProxy extends Worker {
-  private static final Logger logger = Logger.getLogger(WorkerProxy.class.getName());
-  private WorkerMultiplexer workerMultiplexer;
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+  private final WorkerMultiplexer workerMultiplexer;
   private String recordingStreamMessage;
 
   WorkerProxy(
@@ -43,8 +45,10 @@ final class WorkerProxy extends Worker {
   }
 
   @Override
-  void createProcess() throws IOException {
-    workerMultiplexer.createProcess(workerKey, workDir, logFile);
+  Subprocess createProcess() {
+    throw new IllegalStateException(
+        "WorkerProxy does not override createProcess(), the multiplexer process is started in"
+            + " prepareExecution");
   }
 
   @Override
@@ -56,20 +60,19 @@ final class WorkerProxy extends Worker {
   public void prepareExecution(
       SandboxInputs inputFiles, SandboxOutputs outputs, Set<PathFragment> workerFiles)
       throws IOException {
-    createProcess();
+    workerMultiplexer.createProcess(workerKey, workDir);
   }
 
   @Override
   synchronized void destroy() throws IOException {
-    super.destroy();
     try {
-      WorkerMultiplexerManager.removeInstance(workerKey.hashCode());
+      WorkerMultiplexerManager.removeInstance(workerKey);
     } catch (InterruptedException e) {
-      logger.warning(
+      logger.atWarning().withCause(e).log(
           "InterruptedException was caught while destroying multiplexer. "
               + "It could because the multiplexer was interrupted.");
     } catch (UserExecException e) {
-      logger.warning(e.toString());
+      logger.atWarning().withCause(e).log("Exception");
     }
   }
 
@@ -85,7 +88,7 @@ final class WorkerProxy extends Worker {
        * override. InterruptedException will happen when Bazel is waiting for semaphore but user
        * terminates the process, so we do nothing here.
        */
-      logger.warning(
+      logger.atWarning().withCause(e).log(
           "InterruptedException was caught while sending worker request. "
               + "It could because the multiplexer was interrupted.");
     }
@@ -111,7 +114,7 @@ final class WorkerProxy extends Worker {
        * override. InterruptedException will happen when Bazel is waiting for semaphore but user
        * terminates the process, so we do nothing here.
        */
-      logger.warning(
+      logger.atWarning().withCause(e).log(
           "InterruptedException was caught while waiting for work response. "
               + "It could because the multiplexer was interrupted.");
     }

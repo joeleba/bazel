@@ -26,14 +26,12 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.cmdline.TargetPattern;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
@@ -46,10 +44,11 @@ import com.google.devtools.build.lib.pkgcache.LoadingPhaseCompleteEvent;
 import com.google.devtools.build.lib.pkgcache.ParsingFailedEvent;
 import com.google.devtools.build.lib.pkgcache.TargetParsingCompleteEvent;
 import com.google.devtools.build.lib.pkgcache.TestFilter;
-import com.google.devtools.build.lib.repository.ExternalPackageUtil;
+import com.google.devtools.build.lib.repository.ExternalPackageHelper;
 import com.google.devtools.build.lib.skyframe.TargetPatternPhaseValue.TargetPatternPhaseKey;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternSkyKeyOrException;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -69,32 +68,20 @@ import javax.annotation.Nullable;
  */
 final class TargetPatternPhaseFunction implements SkyFunction {
 
-  public TargetPatternPhaseFunction() {
+  private final ExternalPackageHelper externalPackageHelper;
+
+  public TargetPatternPhaseFunction(ExternalPackageHelper externalPackageHelper) {
+    this.externalPackageHelper = externalPackageHelper;
   }
 
   @Override
   public TargetPatternPhaseValue compute(SkyKey key, Environment env) throws InterruptedException {
     TargetPatternPhaseKey options = (TargetPatternPhaseKey) key.argument();
-    PackageValue packageValue = null;
-    boolean workspaceError = false;
-    try {
-      packageValue =
-          (PackageValue)
-              env.getValueOrThrow(
-                  PackageValue.key(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER),
-                  NoSuchPackageException.class);
-    } catch (NoSuchPackageException e) {
-      env.getListener().handle(Event.error(e.getMessage()));
-      workspaceError = true;
-    }
+    WorkspaceNameValue workspaceName = (WorkspaceNameValue) env.getValue(WorkspaceNameValue.key());
     ImmutableSortedSet<String> notSymlinkedInExecrootDirectories =
-        ExternalPackageUtil.getNotSymlinkedInExecrootDirectories(env);
+        externalPackageHelper.getNotSymlinkedInExecrootDirectories(env);
     if (env.valuesMissing()) {
       return null;
-    }
-    String workspaceName = "";
-    if (!workspaceError) {
-      workspaceName = packageValue.getPackage().getWorkspaceName();
     }
 
     RepositoryMappingValue repositoryMappingValue =
@@ -171,15 +158,17 @@ final class TargetPatternPhaseFunction implements SkyFunction {
         }
       } else /*if (determineTests)*/ {
         testsToRun = testTargets.getTargets();
-        targets = ResolvedTargets.<Target>builder()
-            .merge(targets)
-            // Avoid merge() here which would remove the filteredTargets from the targets.
-            .addAll(testsToRun)
-            .mergeError(testTargets.hasError())
-            .build();
-        // filteredTargets is correct in this case - it cannot contain tests that got back in
-        // through test_suite expansion, because the test determination would also filter those out.
-        // However, that's not obvious, and it might be better to explicitly recompute it.
+        targets =
+            ResolvedTargets.<Target>builder()
+                .merge(targets)
+                // Merging in all testsToRun guarantees that targets that will be built (because
+                // they are tests) are not considered to be "filtered out", even if they were
+                // initially filtered out. We can't merge in testTargets because its set of
+                // filteredTargets could include targets that we're building but not testing.
+                .merge(ResolvedTargets.<Target>builder().addAll(testsToRun).build())
+                .mergeError(testTargets.hasError())
+                .build();
+        filteredTargets = targets.getFilteredTargets();
       }
       if (testsToRun != null) {
         // Note that testsToRun can still be null here, if buildTestsOnly && !shouldRunTests.
@@ -229,8 +218,8 @@ final class TargetPatternPhaseFunction implements SkyFunction {
             targetLabels.getTargets(),
             testsToRunLabels,
             targets.hasError(),
-            expandedTargets.hasError() || workspaceError,
-            workspaceName,
+            expandedTargets.hasError(),
+            workspaceName.getName(),
             notSymlinkedInExecrootDirectories);
 
     env.getListener()
@@ -270,7 +259,7 @@ final class TargetPatternPhaseFunction implements SkyFunction {
    * Interprets the command-line arguments by expanding each pattern to targets and populating the
    * list of {@code failedPatterns}.
    *
-   * @param env the Skylark environment
+   * @param env the Starlark environment
    * @param options the command-line arguments in structured form
    * @param failedPatterns a list into which failed patterns are added
    */
@@ -407,7 +396,7 @@ final class TargetPatternPhaseFunction implements SkyFunction {
    * @param testFilter the test filter
    */
   private static ResolvedTargets<Target> determineTests(
-      Environment env, List<String> targetPatterns, String offset, TestFilter testFilter)
+      Environment env, List<String> targetPatterns, PathFragment offset, TestFilter testFilter)
       throws InterruptedException {
     List<TargetPatternKey> patternSkyKeys = new ArrayList<>();
     for (TargetPatternSkyKeyOrException keyOrException :

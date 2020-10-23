@@ -14,13 +14,16 @@
 
 package com.google.devtools.build.lib.actions;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.skyframe.DetailedException;
+import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.ExitCode;
-import javax.annotation.Nullable;
 
 /**
  * This exception gets thrown if there were errors during the execution phase of the build.
@@ -33,53 +36,39 @@ import javax.annotation.Nullable;
  *
  * <p>This exception typically leads to Bazel termination with exit code {@link
  * ExitCode#BUILD_FAILURE}. However, if a more specific exit code is appropriate, it can be
- * propagated by specifying the exit code to the constructor.
+ * propagated by specifying the exit code to the constructor using a {@link DetailedExitCode}.
  */
 @ThreadSafe
-public class BuildFailedException extends Exception {
+public class BuildFailedException extends Exception implements DetailedException {
   private final boolean catastrophic;
-  private final Action action;
   private final NestedSet<Cause> rootCauses;
   private final boolean errorAlreadyShown;
-  @Nullable private final ExitCode exitCode;
+  private final DetailedExitCode detailedExitCode;
 
-  public BuildFailedException() {
-    this(null);
-  }
-
-  public BuildFailedException(String message) {
-    this(message, false, null, NestedSetBuilder.emptySet(Order.STABLE_ORDER), false, null);
-  }
-
-  public BuildFailedException(String message, ExitCode exitCode) {
-    this(message, false, null, NestedSetBuilder.emptySet(Order.STABLE_ORDER), false, exitCode);
-  }
-
-  public BuildFailedException(String message, boolean catastrophic) {
-    this(message, catastrophic, null, NestedSetBuilder.emptySet(Order.STABLE_ORDER), false, null);
+  public BuildFailedException(String message, DetailedExitCode detailedExitCode) {
+    this(
+        message,
+        /*catastrophic=*/ false,
+        NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+        /*errorAlreadyShown=*/ false,
+        detailedExitCode);
   }
 
   public BuildFailedException(
       String message,
       boolean catastrophic,
-      Action action,
       NestedSet<Cause> rootCauses,
       boolean errorAlreadyShown,
-      ExitCode exitCode) {
+      DetailedExitCode detailedExitCode) {
     super(message);
     this.catastrophic = catastrophic;
     this.rootCauses = rootCauses;
-    this.action = action;
     this.errorAlreadyShown = errorAlreadyShown;
-    this.exitCode = exitCode;
+    this.detailedExitCode = checkNotNull(detailedExitCode);
   }
 
   public boolean isCatastrophic() {
     return catastrophic;
-  }
-
-  public Action getAction() {
-    return action;
   }
 
   public NestedSet<Cause> getRootCauses() {
@@ -90,7 +79,8 @@ public class BuildFailedException extends Exception {
     return errorAlreadyShown || getMessage() == null;
   }
 
-  @Nullable public ExitCode getExitCode() {
-    return exitCode;
+  @Override
+  public DetailedExitCode getDetailedExitCode() {
+    return detailedExitCode;
   }
 }

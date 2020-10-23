@@ -623,6 +623,10 @@ EOF
   bazel fetch //zoo:ball-pit >& $TEST_log || fail "Fetch failed"
   [[ $(ls $external_dir | grep $needle) ]] || fail "$needle not added to $external_dir"
 
+  bazel query --output=build --nohost_deps --noimplicit_deps 'deps(//zoo:ball-pit)' >& $TEST_log \
+    || fail "bazel query failed"
+  expect_log "maven_coordinates=com.example.carnivore:carnivore:1.23"
+
   # Rerun fetch while nc isn't serving anything to make sure the fetched result
   # is cached.
   bazel fetch //zoo:ball-pit >& $TEST_log || fail "Incremental fetch failed"
@@ -1381,6 +1385,10 @@ http_archive(
   sha256="${sha256}",
 )
 EOF
+
+  # Prime the repository cache.
+  bazel build '@ext//:foo' || fail "expected success"
+
   # Use `--repository_cache` with no path to explicitly disable repository cache
   bazel build --repository_cache= '@ext//:foo' || fail "expected success"
 
@@ -1395,10 +1403,14 @@ EOF
   rm -f "${TOPDIR}/ext.zip"
   bazel clean --expunge
 
+  # Do a noop build with the cache enabled to ensure the cache can be disabled
+  # after the server starts.
+  bazel build
+
   # The build should fail since we are not using the repository cache, but the
   # original file can no longer be "downloaded".
   bazel build --repository_cache= '@ext//:foo' \
-      && fail "Should fail for lack of fetchable faile" || :
+      && fail "Should fail for lack of fetchable archive" || :
 }
 
 function test_repository_cache() {
@@ -2239,11 +2251,16 @@ def foo_repos():
 EOF
 
   bazel build @foo//... > "${TEST_log}" 2>&1 && fail "expected failure"
+  inplace-sed -e "s?$WRKDIR/?WRKDIR/?g" -e "s?$TEST_TMPDIR/?TEST_TMPDIR/?g" "${TEST_log}"
+
   expect_log 'error.*repository.*foo'
   expect_log '@bar//:foo.build'
-  expect_log 'path/to/main/foo.bzl'
-  expect_log 'path/to/main/repos.bzl'
-  expect_log 'path/to/main/WORKSPACE'
+  expect_log "Repository foo instantiated at:"
+  expect_log "  WRKDIR/path/to/main/WORKSPACE:"
+  expect_log "  WRKDIR/path/to/main/repos.bzl:5"
+  expect_log "  WRKDIR/path/to/main/foo.bzl:4"
+  expect_log "Repository rule http_archive defined at:"
+  expect_log "  TEST_TMPDIR/.*/external/bazel_tools/tools/build_defs/repo/http.bzl:"
 }
 
 function test_circular_definition_reported() {
@@ -2310,6 +2327,7 @@ EOF
   touch BUILD
 
   bazel build //... > "${TEST_log}" 2>&1 && fail "expected failure" || :
+  inplace-sed -e 's?$(pwd)/?PWD/?g' "${TEST_log}"
 
   expect_not_log '[iI]nternal [eE]rror'
   expect_not_log 'IllegalStateException'
@@ -2319,11 +2337,11 @@ EOF
 
   # We expect to find the call stack for the definition of the repositories
   # a and b
-  expect_log "WORKSPACE:4:1"
-  expect_log "foo.bzl:4:3"
+  expect_log "WORKSPACE:4:4"
+  expect_log "foo.bzl:4:15"
 
-  expect_log "WORKSPACE:5:1"
-  expect_log "bar.bzl:4:3"
+  expect_log "WORKSPACE:5:4"
+  expect_log "bar.bzl:4:15"
 }
 
 function test_missing_repo_reported() {
@@ -2361,12 +2379,15 @@ load("@data//:value.bzl", "value")
 EOF
 
   bazel build //... > "${TEST_log}" 2>&1 && fail "expected failure" || :
+  inplace-sed -e 's?$(pwd)/?PWD/?g' "${TEST_log}"
 
-  expect_log "add.*this_repo_is_missing.*WORKSPACE"
+  expect_log "you have to add.*this_repo_is_missing.*WORKSPACE"
   # Also verify that the repository class and its definition is reported, to
   # help finding out where the implict dependency comes from.
-  expect_log 'data.*is.*data_repo'
-  expect_log 'data_repo.*main/withimplicit.bzl:6'
+  expect_log "Repository data instantiated at:"
+  expect_log ".../WORKSPACE:47"
+  expect_log "Repository rule data_repo defined at:"
+  expect_log ".../withimplicit.bzl:6"
 }
 
 function test_overwrite_existing_workspace_build() {
@@ -2441,6 +2462,61 @@ EOF
       cd ..
     done
   done
+}
+
+function test_external_java_target_depends_on_external_resources() {
+  local test_repo1=$TEST_TMPDIR/repo1
+  local test_repo2=$TEST_TMPDIR/repo2
+
+  mkdir -p $test_repo1/a
+  mkdir -p $test_repo2
+
+  cat >> $(create_workspace_with_default_repos WORKSPACE) <<EOF
+local_repository(name = 'repo1', path='$test_repo1')
+local_repository(name = 'repo2', path='$test_repo2')
+EOF
+  cat > BUILD <<'EOF'
+java_binary(
+    name = "a_bin",
+    runtime_deps = ["@repo1//a:a"],
+    main_class = "a.A",
+)
+EOF
+
+  touch $test_repo1/WORKSPACE
+  cat > $test_repo1/a/BUILD <<'EOF'
+package(default_visibility = ["//visibility:public"])
+
+java_library(
+    name = "a",
+    srcs = ["A.java"],
+    resources = ["@repo2//:resource_files"],
+)
+EOF
+  cat > $test_repo1/a/A.java <<EOF
+package a;
+
+public class A {
+    public static void main(String args[]) {
+    }
+}
+EOF
+
+  touch $test_repo2/WORKSPACE
+  cat > $test_repo2/BUILD <<'EOF'
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "resource_files",
+    srcs = ["resource.txt"]
+)
+EOF
+
+  cat > $test_repo2/resource.txt <<EOF
+RESOURCE
+EOF
+
+  bazel build a_bin >& $TEST_log  || fail "Expected build/run to succeed"
 }
 
 run_suite "external tests"

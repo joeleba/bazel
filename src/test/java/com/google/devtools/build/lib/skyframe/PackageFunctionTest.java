@@ -15,35 +15,46 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
+import com.google.devtools.build.lib.packages.BazelModuleContext;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.packages.ConstantRuleVisibility;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
-import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
+import com.google.devtools.build.lib.packages.PackageValidator;
+import com.google.devtools.build.lib.packages.PackageValidator.InvalidPackageException;
+import com.google.devtools.build.lib.packages.semantics.BuildLanguageOptions;
+import com.google.devtools.build.lib.pkgcache.PackageOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
+import com.google.devtools.build.lib.server.FailureDetails.PackageLoading;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.lib.testutil.ManualClock;
-import com.google.devtools.build.lib.testutil.MoreAsserts;
+import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
+import com.google.devtools.build.lib.util.DetailedExitCode;
+import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.Dirent;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -68,12 +79,20 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Module;
+import net.starlark.java.eval.StarlarkInt;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 /**
  * Unit tests of specific functionality of PackageFunction. Note that it's already tested indirectly
@@ -82,27 +101,31 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class PackageFunctionTest extends BuildViewTestCase {
 
+  @Rule public final MockitoRule mockito = MockitoJUnit.rule();
+
+  @Mock private PackageValidator mockPackageValidator;
+
   private CustomInMemoryFs fs = new CustomInMemoryFs(new ManualClock());
 
   private void preparePackageLoading(Path... roots) {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.getDefaults(StarlarkSemanticsOptions.class), roots);
+        Options.getDefaults(BuildLanguageOptions.class), roots);
   }
 
   private void preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-      StarlarkSemanticsOptions starlarkSemanticsOptions, Path... roots) {
-    PackageCacheOptions packageCacheOptions = Options.getDefaults(PackageCacheOptions.class);
-    packageCacheOptions.defaultVisibility = ConstantRuleVisibility.PUBLIC;
-    packageCacheOptions.showLoadingProgress = true;
-    packageCacheOptions.globbingThreads = 7;
+      BuildLanguageOptions buildLanguageOptions, Path... roots) {
+    PackageOptions packageOptions = Options.getDefaults(PackageOptions.class);
+    packageOptions.defaultVisibility = ConstantRuleVisibility.PUBLIC;
+    packageOptions.showLoadingProgress = true;
+    packageOptions.globbingThreads = 7;
     getSkyframeExecutor()
         .preparePackageLoading(
             new PathPackageLocator(
                 outputBase,
                 Arrays.stream(roots).map(Root::fromPath).collect(ImmutableList.toImmutableList()),
                 BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY),
-            packageCacheOptions,
-            starlarkSemanticsOptions,
+            packageOptions,
+            buildLanguageOptions,
             UUID.randomUUID(),
             ImmutableMap.<String, String>of(),
             new TimestampGranularityMonitor(BlazeClock.instance()));
@@ -112,6 +135,11 @@ public class PackageFunctionTest extends BuildViewTestCase {
   @Override
   protected FileSystem createFileSystem() {
     return fs;
+  }
+
+  @Override
+  protected PackageValidator getPackageValidator() {
+    return mockPackageValidator;
   }
 
   private Package validPackageWithoutErrors(SkyKey skyKey) throws InterruptedException {
@@ -128,8 +156,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     skyframeExecutor.injectExtraPrecomputedValues(
         ImmutableList.of(
             PrecomputedValue.injected(
-                RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE,
-                Optional.<RootedPath>absent())));
+                RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE, Optional.empty())));
     EvaluationResult<PackageValue> result =
         SkyframeExecutorTestUtils.evaluate(
             skyframeExecutor, skyKey, /*keepGoing=*/ false, reporter);
@@ -147,6 +174,77 @@ public class PackageFunctionTest extends BuildViewTestCase {
   public void testValidPackage() throws Exception {
     scratch.file("pkg/BUILD");
     validPackageWithoutErrors(PackageValue.key(PackageIdentifier.parse("@//pkg")));
+  }
+
+  @Test
+  public void testInvalidPackage() throws Exception {
+    scratch.file("pkg/BUILD", "sh_library(name='foo', srcs=['foo.sh'])");
+    scratch.file("pkg/foo.sh");
+
+    doAnswer(
+            inv -> {
+              Package pkg = inv.getArgument(0, Package.class);
+              if (pkg.getName().equals("pkg")) {
+                inv.getArgument(1, ExtendedEventHandler.class).handle(Event.warn("warning event"));
+                throw new InvalidPackageException(pkg.getPackageIdentifier(), "no good");
+              }
+              return null;
+            })
+        .when(mockPackageValidator)
+        .validate(any(Package.class), any(ExtendedEventHandler.class));
+
+    invalidatePackages();
+
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//pkg"));
+    EvaluationResult<PackageValue> result =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
+    assertThatEvaluationResult(result).hasError();
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skyKey)
+        .hasExceptionThat()
+        .isInstanceOf(InvalidPackageException.class);
+    assertThatEvaluationResult(result)
+        .hasErrorEntryForKeyThat(skyKey)
+        .hasExceptionThat()
+        .hasMessageThat()
+        .contains("no such package 'pkg': no good");
+    assertContainsEvent("warning event");
+  }
+
+  @Test
+  public void testSkyframeExecutorClearedPackagesResultsInReload() throws Exception {
+    scratch.file("pkg/BUILD", "sh_library(name='foo', srcs=['foo.sh'])");
+    scratch.file("pkg/foo.sh");
+
+    invalidatePackages();
+
+    // Use number of times the package was validated as a proxy for number of times it was loaded.
+    AtomicInteger validationCount = new AtomicInteger();
+    doAnswer(
+            inv -> {
+              if (inv.getArgument(0, Package.class).getName().equals("pkg")) {
+                validationCount.incrementAndGet();
+              }
+              return null;
+            })
+        .when(mockPackageValidator)
+        .validate(any(Package.class), any(ExtendedEventHandler.class));
+
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//pkg"));
+    EvaluationResult<PackageValue> result1 =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
+    assertThatEvaluationResult(result1).hasNoError();
+
+    skyframeExecutor.clearLoadedPackages();
+
+    EvaluationResult<PackageValue> result2 =
+        SkyframeExecutorTestUtils.evaluate(
+            getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
+    assertThatEvaluationResult(result2).hasNoError();
+
+    assertThat(validationCount.get()).isEqualTo(2);
   }
 
   @Test
@@ -217,10 +315,12 @@ public class PackageFunctionTest extends BuildViewTestCase {
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage).contains("Inconsistent filesystem operations");
     assertThat(errorMessage).contains(expectedMessage);
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.PERSISTENT_INCONSISTENT_FILESYSTEM_ERROR);
   }
 
   @Test
-  public void testPropagatesFilesystemInconsistencies_Globbing() throws Exception {
+  public void testPropagatesFilesystemInconsistencies_globbing() throws Exception {
     getSkyframeExecutor().turnOffSyscallCacheForTesting();
     reporter.removeHandler(failFastHandler);
     RecordingDifferencer differencer = getSkyframeExecutor().getDifferencerForTesting();
@@ -253,6 +353,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage).contains("Inconsistent filesystem operations");
     assertThat(errorMessage).contains(expectedMessage);
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.PERSISTENT_INCONSISTENT_FILESYSTEM_ERROR);
   }
 
   /** Regression test for unexpected exception type from PackageValue. */
@@ -281,6 +383,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage).contains("Inconsistent filesystem operations");
     assertThat(errorMessage).contains(expectedMessage);
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.TRANSIENT_INCONSISTENT_FILESYSTEM_ERROR);
   }
 
   @SuppressWarnings("unchecked") // Cast of srcs attribute to Iterable<Label>.
@@ -292,9 +396,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     preparePackageLoading(rootDirectory);
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//foo"));
     Package pkg = validPackageWithoutErrors(skyKey);
-    assertThat(
-            (Iterable<Label>)
-                pkg.getTarget("foo").getAssociatedRule().getAttributeContainer().getAttr("srcs"))
+    assertThat((Iterable<Label>) pkg.getTarget("foo").getAssociatedRule().getAttr("srcs"))
         .containsExactly(
             Label.parseAbsoluteUnchecked("//foo:b.txt"),
             Label.parseAbsoluteUnchecked("//foo:c/c.txt"))
@@ -306,9 +408,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
             ModifiedFileSet.builder().modify(PathFragment.create("foo/d.txt")).build(),
             Root.fromPath(rootDirectory));
     pkg = validPackageWithoutErrors(skyKey);
-    assertThat(
-            (Iterable<Label>)
-                pkg.getTarget("foo").getAssociatedRule().getAttributeContainer().getAttr("srcs"))
+    assertThat((Iterable<Label>) pkg.getTarget("foo").getAssociatedRule().getAttr("srcs"))
         .containsExactly(
             Label.parseAbsoluteUnchecked("//foo:b.txt"),
             Label.parseAbsoluteUnchecked("//foo:c/c.txt"),
@@ -341,18 +441,18 @@ public class PackageFunctionTest extends BuildViewTestCase {
             Root.fromPath(rootDirectory));
     assertSrcs(validPackageWithoutErrors(skyKey), "foo", "//foo:a.config", "//foo:b.txt");
     getSkyframeExecutor().resetEvaluator();
-    PackageCacheOptions packageCacheOptions = Options.getDefaults(PackageCacheOptions.class);
-    packageCacheOptions.defaultVisibility = ConstantRuleVisibility.PUBLIC;
-    packageCacheOptions.showLoadingProgress = true;
-    packageCacheOptions.globbingThreads = 7;
+    PackageOptions packageOptions = Options.getDefaults(PackageOptions.class);
+    packageOptions.defaultVisibility = ConstantRuleVisibility.PUBLIC;
+    packageOptions.showLoadingProgress = true;
+    packageOptions.globbingThreads = 7;
     getSkyframeExecutor()
         .preparePackageLoading(
             new PathPackageLocator(
                 outputBase,
                 ImmutableList.of(Root.fromPath(rootDirectory)),
                 BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY),
-            packageCacheOptions,
-            Options.getDefaults(StarlarkSemanticsOptions.class),
+            packageOptions,
+            Options.getDefaults(BuildLanguageOptions.class),
             UUID.randomUUID(),
             ImmutableMap.<String, String>of(),
             tsgm);
@@ -432,8 +532,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
   @SuppressWarnings("unchecked")
   private static Iterable<Label> getSrcs(Package pkg, String targetName)
       throws NoSuchTargetException {
-    return (Iterable<Label>)
-        pkg.getTarget(targetName).getAssociatedRule().getAttributeContainer().getAttr("srcs");
+    return (Iterable<Label>) pkg.getTarget(targetName).getAssociatedRule().getAttr("srcs");
   }
 
   @Test
@@ -473,7 +572,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testTransitiveSkylarkDepsStoredInPackage() throws Exception {
+  public void testTransitiveStarlarkDepsStoredInPackage() throws Exception {
     scratch.file("foo/BUILD", "load('//bar:ext.bzl', 'a')");
     scratch.file("bar/BUILD");
     scratch.file("bar/ext.bzl", "load('//baz:ext.bzl', 'b')", "a = b");
@@ -486,7 +585,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//foo"));
     Package pkg = validPackageWithoutErrors(skyKey);
-    assertThat(pkg.getSkylarkFileDependencies())
+    assertThat(pkg.getStarlarkFileDependencies())
         .containsExactly(
             Label.parseAbsolute("//bar:ext.bzl", ImmutableMap.of()),
             Label.parseAbsolute("//baz:ext.bzl", ImmutableMap.of()));
@@ -499,51 +598,53 @@ public class PackageFunctionTest extends BuildViewTestCase {
             Root.fromPath(rootDirectory));
 
     pkg = validPackageWithoutErrors(skyKey);
-    assertThat(pkg.getSkylarkFileDependencies())
+    assertThat(pkg.getStarlarkFileDependencies())
         .containsExactly(
             Label.parseAbsolute("//bar:ext.bzl", ImmutableMap.of()),
             Label.parseAbsolute("//qux:ext.bzl", ImmutableMap.of()));
   }
 
   @Test
-  public void testNonExistingSkylarkExtension() throws Exception {
+  public void testNonExistingStarlarkExtension() throws Exception {
     reporter.removeHandler(failFastHandler);
     scratch.file(
-        "test/skylark/BUILD",
-        "load('//test/skylark:bad_extension.bzl', 'some_symbol')",
+        "test/starlark/BUILD",
+        "load('//test/starlark:bad_extension.bzl', 'some_symbol')",
         "genrule(name = gr,",
         "    outs = ['out.txt'],",
         "    cmd = 'echo hello >@')");
     invalidatePackages();
 
-    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/skylark"));
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/starlark"));
     EvaluationResult<PackageValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
     assertThat(result.hasError()).isTrue();
     ErrorInfo errorInfo = result.getError(skyKey);
     String expectedMsg =
-        "error loading package 'test/skylark': "
-            + "Unable to load file '//test/skylark:bad_extension.bzl': file doesn't exist";
+        "error loading package 'test/starlark': "
+            + "cannot load '//test/starlark:bad_extension.bzl': no such file";
     assertThat(errorInfo.getException()).hasMessageThat().isEqualTo(expectedMsg);
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.IMPORT_STARLARK_FILE_ERROR);
   }
 
   @Test
-  public void testNonExistingSkylarkExtensionFromExtension() throws Exception {
+  public void testNonExistingStarlarkExtensionFromExtension() throws Exception {
     reporter.removeHandler(failFastHandler);
     scratch.file(
-        "test/skylark/extension.bzl",
-        "load('//test/skylark:bad_extension.bzl', 'some_symbol')",
+        "test/starlark/extension.bzl",
+        "load('//test/starlark:bad_extension.bzl', 'some_symbol')",
         "a = 'a'");
     scratch.file(
-        "test/skylark/BUILD",
-        "load('//test/skylark:extension.bzl', 'a')",
+        "test/starlark/BUILD",
+        "load('//test/starlark:extension.bzl', 'a')",
         "genrule(name = gr,",
         "    outs = ['out.txt'],",
         "    cmd = 'echo hello >@')");
     invalidatePackages();
 
-    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/skylark"));
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/starlark"));
     EvaluationResult<PackageValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
@@ -552,25 +653,27 @@ public class PackageFunctionTest extends BuildViewTestCase {
     assertThat(errorInfo.getException())
         .hasMessageThat()
         .isEqualTo(
-            "error loading package 'test/skylark': "
-                + "in /workspace/test/skylark/extension.bzl: "
-                + "Unable to load file '//test/skylark:bad_extension.bzl': file doesn't exist");
+            "error loading package 'test/starlark': "
+                + "in /workspace/test/starlark/extension.bzl: "
+                + "cannot load '//test/starlark:bad_extension.bzl': no such file");
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.IMPORT_STARLARK_FILE_ERROR);
   }
 
   @Test
-  public void testSymlinkCycleWithSkylarkExtension() throws Exception {
+  public void testSymlinkCycleWithStarlarkExtension() throws Exception {
     reporter.removeHandler(failFastHandler);
-    Path extensionFilePath = scratch.resolve("/workspace/test/skylark/extension.bzl");
+    Path extensionFilePath = scratch.resolve("/workspace/test/starlark/extension.bzl");
     FileSystemUtils.ensureSymbolicLink(extensionFilePath, PathFragment.create("extension.bzl"));
     scratch.file(
-        "test/skylark/BUILD",
-        "load('//test/skylark:extension.bzl', 'a')",
+        "test/starlark/BUILD",
+        "load('//test/starlark:extension.bzl', 'a')",
         "genrule(name = gr,",
         "    outs = ['out.txt'],",
         "    cmd = 'echo hello >@')");
     invalidatePackages();
 
-    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/skylark"));
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//test/starlark"));
     EvaluationResult<PackageValue> result =
         SkyframeExecutorTestUtils.evaluate(
             getSkyframeExecutor(), skyKey, /*keepGoing=*/ false, reporter);
@@ -580,8 +683,10 @@ public class PackageFunctionTest extends BuildViewTestCase {
     assertThat(errorInfo.getException())
         .hasMessageThat()
         .isEqualTo(
-            "error loading package 'test/skylark': Encountered error while reading extension "
-                + "file 'test/skylark/extension.bzl': Symlink cycle");
+            "error loading package 'test/starlark': Encountered error while reading extension "
+                + "file 'test/starlark/extension.bzl': Symlink cycle");
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.IMPORT_STARLARK_FILE_ERROR);
   }
 
   @Test
@@ -613,7 +718,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     validPackageWithoutErrors(PackageValue.key(PackageIdentifier.parse("@//p")));
   }
 
-  // See WorkspaceASTFunctionTest for tests that exercise load('@repo...').
+  // See WorkspaceFileFunctionTest for tests that exercise load('@repo...').
 
   @Test
   public void testLoadBadLabel() throws Exception {
@@ -764,6 +869,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     assertThat(errorMessage).contains("nope");
     assertThat(errorInfo.getException()).isInstanceOf(NoSuchPackageException.class);
     assertThat(errorInfo.getException()).hasCauseThat().isInstanceOf(IOException.class);
+    assertDetailedExitCode(errorInfo.getException(), PackageLoading.Code.BUILD_FILE_MISSING);
   }
 
   @Test
@@ -783,6 +889,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     assertThat(errorMessage).contains("nope");
     assertThat(errorInfo.getException()).isInstanceOf(NoSuchPackageException.class);
     assertThat(errorInfo.getException()).hasCauseThat().isInstanceOf(IOException.class);
+    assertDetailedExitCode(
+        errorInfo.getException(), PackageLoading.Code.IMPORT_STARLARK_FILE_ERROR);
   }
 
   @Test
@@ -831,35 +939,33 @@ public class PackageFunctionTest extends BuildViewTestCase {
   }
 
   @Test
-  public void testGlobAllowEmpty_ParamValueMustBeBoolean() throws Exception {
+  public void testGlobAllowEmpty_paramValueMustBeBoolean() throws Exception {
     reporter.removeHandler(failFastHandler);
 
     scratch.file("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty = 5)");
     invalidatePackages();
 
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//pkg"));
-    Package pkg = validPackage(skyKey);
+    validPackage(skyKey);
 
-    String expectedEventString = "expected boolean for argument `allow_empty`, got `5`";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
-    assertContainsEvent(expectedEventString);
+    assertContainsEvent("expected boolean for argument `allow_empty`, got `5`");
   }
 
   @Test
-  public void testGlobAllowEmpty_FunctionParam() throws Exception {
+  public void testGlobAllowEmpty_functionParam() throws Exception {
     scratch.file("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty=True)");
     invalidatePackages();
 
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//pkg"));
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
   }
 
   @Test
-  public void testGlobAllowEmpty_StarlarkOption() throws Exception {
+  public void testGlobAllowEmpty_starlarkOption() throws Exception {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.parse(StarlarkSemanticsOptions.class, "--incompatible_disallow_empty_glob=false")
+        Options.parse(BuildLanguageOptions.class, "--incompatible_disallow_empty_glob=false")
             .getOptions(),
         rootDirectory);
 
@@ -869,11 +975,11 @@ public class PackageFunctionTest extends BuildViewTestCase {
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//pkg"));
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
   }
 
   @Test
-  public void testGlobDisallowEmpty_FunctionParam_WasNonEmptyAndBecomesEmpty() throws Exception {
+  public void testGlobDisallowEmpty_functionParam_wasNonEmptyAndBecomesEmpty() throws Exception {
     scratch.file("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty=False)");
     scratch.file("pkg/blah.foo");
     invalidatePackages();
@@ -882,7 +988,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
 
     scratch.deleteFile("pkg/blah.foo");
     getSkyframeExecutor()
@@ -894,16 +1000,15 @@ public class PackageFunctionTest extends BuildViewTestCase {
     reporter.removeHandler(failFastHandler);
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
-    assertContainsEvent(expectedEventString);
+    assertContainsEvent(
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).");
   }
 
   @Test
-  public void testGlobDisallowEmpty_StarlarkOption_WasNonEmptyAndBecomesEmpty() throws Exception {
+  public void testGlobDisallowEmpty_starlarkOption_wasNonEmptyAndBecomesEmpty() throws Exception {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.parse(StarlarkSemanticsOptions.class, "--incompatible_disallow_empty_glob=true")
+        Options.parse(BuildLanguageOptions.class, "--incompatible_disallow_empty_glob=true")
             .getOptions(),
         rootDirectory);
 
@@ -915,7 +1020,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
 
     scratch.deleteFile("pkg/blah.foo");
     getSkyframeExecutor()
@@ -927,14 +1032,13 @@ public class PackageFunctionTest extends BuildViewTestCase {
     reporter.removeHandler(failFastHandler);
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
-    assertContainsEvent(expectedEventString);
+    assertContainsEvent(
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).");
   }
 
   @Test
-  public void testGlobDisallowEmpty_FunctionParam_WasEmptyAndStaysEmpty() throws Exception {
+  public void testGlobDisallowEmpty_functionParam_wasEmptyAndStaysEmpty() throws Exception {
     scratch.file("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty=False)");
     invalidatePackages();
 
@@ -944,8 +1048,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
     String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).";
     assertContainsEvent(expectedEventString);
 
     scratch.overwriteFile("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty=False) #comment");
@@ -957,14 +1061,13 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
     assertContainsEvent(expectedEventString);
   }
 
   @Test
-  public void testGlobDisallowEmpty_StarlarkOption_WasEmptyAndStaysEmpty() throws Exception {
+  public void testGlobDisallowEmpty_starlarkOption_wasEmptyAndStaysEmpty() throws Exception {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.parse(StarlarkSemanticsOptions.class, "--incompatible_disallow_empty_glob=true")
+        Options.parse(BuildLanguageOptions.class, "--incompatible_disallow_empty_glob=true")
             .getOptions(),
         rootDirectory);
 
@@ -977,8 +1080,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
     String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).";
     assertContainsEvent(expectedEventString);
 
     scratch.overwriteFile("pkg/BUILD", "x = " + "glob(['*.foo']) #comment");
@@ -990,12 +1093,11 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
     assertContainsEvent(expectedEventString);
   }
 
   @Test
-  public void testGlobDisallowEmpty_FunctionParam_WasEmptyDueToExcludeAndStaysEmpty()
+  public void testGlobDisallowEmpty_functionParam_wasEmptyDueToExcludeAndStaysEmpty()
       throws Exception {
     scratch.file("pkg/BUILD", "x = glob(include=['*.foo'], exclude=['blah.*'], allow_empty=False)");
     scratch.file("pkg/blah.foo");
@@ -1007,8 +1109,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
     String expectedEventString =
-        "all files in the glob have been excluded, but allow_empty is set to False.";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
+        "all files in the glob have been excluded, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).";
     assertContainsEvent(expectedEventString);
 
     scratch.overwriteFile(
@@ -1022,15 +1124,14 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
     assertContainsEvent(expectedEventString);
   }
 
   @Test
-  public void testGlobDisallowEmpty_StarlarkOption_WasEmptyDueToExcludeAndStaysEmpty()
+  public void testGlobDisallowEmpty_starlarkOption_wasEmptyDueToExcludeAndStaysEmpty()
       throws Exception {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.parse(StarlarkSemanticsOptions.class, "--incompatible_disallow_empty_glob=true")
+        Options.parse(BuildLanguageOptions.class, "--incompatible_disallow_empty_glob=true")
             .getOptions(),
         rootDirectory);
 
@@ -1044,8 +1145,8 @@ public class PackageFunctionTest extends BuildViewTestCase {
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
     String expectedEventString =
-        "all files in the glob have been excluded, but allow_empty is set to False.";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
+        "all files in the glob have been excluded, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).";
     assertContainsEvent(expectedEventString);
 
     scratch.overwriteFile("pkg/BUILD", "x = glob(include=['*.foo'], exclude=['blah.*']) # comment");
@@ -1057,12 +1158,11 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
     assertContainsEvent(expectedEventString);
   }
 
   @Test
-  public void testGlobDisallowEmpty_FunctionParam_WasEmptyAndBecomesNonEmpty() throws Exception {
+  public void testGlobDisallowEmpty_functionParam_wasEmptyAndBecomesNonEmpty() throws Exception {
     scratch.file("pkg/BUILD", "x = " + "glob(['*.foo'], allow_empty=False)");
     invalidatePackages();
 
@@ -1071,10 +1171,9 @@ public class PackageFunctionTest extends BuildViewTestCase {
     reporter.removeHandler(failFastHandler);
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
-    assertContainsEvent(expectedEventString);
+    assertContainsEvent(
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).");
 
     scratch.file("pkg/blah.foo");
     getSkyframeExecutor()
@@ -1084,15 +1183,16 @@ public class PackageFunctionTest extends BuildViewTestCase {
             Root.fromPath(rootDirectory));
 
     reporter.addHandler(failFastHandler);
+    eventCollector.clear();
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
   }
 
   @Test
-  public void testGlobDisallowEmpty_StarlarkOption_WasEmptyAndBecomesNonEmpty() throws Exception {
+  public void testGlobDisallowEmpty_starlarkOption_wasEmptyAndBecomesNonEmpty() throws Exception {
     preparePackageLoadingWithCustomStarklarkSemanticsOptions(
-        Options.parse(StarlarkSemanticsOptions.class, "--incompatible_disallow_empty_glob=true")
+        Options.parse(BuildLanguageOptions.class, "--incompatible_disallow_empty_glob=true")
             .getOptions(),
         rootDirectory);
 
@@ -1104,10 +1204,10 @@ public class PackageFunctionTest extends BuildViewTestCase {
     reporter.removeHandler(failFastHandler);
     Package pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isTrue();
-    String expectedEventString =
-        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False";
-    MoreAsserts.assertContainsEvent(pkg.getEvents(), expectedEventString);
-    assertContainsEvent(expectedEventString);
+
+    assertContainsEvent(
+        "glob pattern '*.foo' didn't match anything, but allow_empty is set to False (the "
+            + "default value of allow_empty can be set with --incompatible_disallow_empty_glob).");
 
     scratch.file("pkg/blah.foo");
     getSkyframeExecutor()
@@ -1117,9 +1217,45 @@ public class PackageFunctionTest extends BuildViewTestCase {
             Root.fromPath(rootDirectory));
 
     reporter.addHandler(failFastHandler);
+    eventCollector.clear();
     pkg = validPackage(skyKey);
     assertThat(pkg.containsErrors()).isFalse();
-    assertThat(pkg.getEvents()).isEmpty();
+    assertNoEvents();
+  }
+
+  @Test
+  public void testPackageRecordsLoadedModules() throws Exception {
+    scratch.file("p/BUILD", "load('a.bzl', 'a'); load(':b.bzl', 'b')");
+    scratch.file("p/a.bzl", "load('c.bzl', 'c'); a = c");
+    scratch.file("p/b.bzl", "load(':c.bzl', 'c'); b = c");
+    scratch.file("p/c.bzl", "c = 0");
+
+    // load p
+    preparePackageLoading(rootDirectory);
+    SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//p"));
+    Package p = validPackageWithoutErrors(skyKey);
+
+    // Keys are load strings as they appear in the source (notice ":" in one of them).
+    Map<String, Module> pLoads = p.getLoads();
+    assertThat(pLoads.keySet().toString()).isEqualTo("[a.bzl, :b.bzl]");
+
+    // subgraph a
+    Module a = pLoads.get("a.bzl");
+    assertThat(a.toString()).isEqualTo("<module //p:a.bzl>");
+    Map<String, Module> aLoads = BazelModuleContext.of(a).loads();
+    assertThat(aLoads.keySet().toString()).isEqualTo("[c.bzl]");
+    Module cViaA = aLoads.get("c.bzl");
+    assertThat(cViaA.toString()).isEqualTo("<module //p:c.bzl>");
+
+    // subgraph b
+    Module b = pLoads.get(":b.bzl");
+    assertThat(b.toString()).isEqualTo("<module //p:b.bzl>");
+    Map<String, Module> bLoads = BazelModuleContext.of(b).loads();
+    assertThat(bLoads.keySet().toString()).isEqualTo("[:c.bzl]");
+    Module cViaB = bLoads.get(":c.bzl");
+    assertThat(cViaB).isSameInstanceAs(cViaA);
+
+    assertThat(cViaA.getGlobal("c")).isEqualTo(StarlarkInt.of(0));
   }
 
   @Test
@@ -1218,6 +1354,216 @@ public class PackageFunctionTest extends BuildViewTestCase {
     // presence of a symlink cycle encountered during glob evaluation.
   }
 
+  private static void assertDetailedExitCode(
+      Exception exception, PackageLoading.Code expectedPackageLoadingCode) {
+    assertThat(exception).isInstanceOf(DetailedException.class);
+    DetailedExitCode detailedExitCode = ((DetailedException) exception).getDetailedExitCode();
+    assertThat(detailedExitCode.getExitCode()).isEqualTo(ExitCode.BUILD_FAILURE);
+    assertThat(detailedExitCode.getFailureDetail().getPackageLoading().getCode())
+        .isEqualTo(expectedPackageLoadingCode);
+  }
+
+  /**
+   * Tests of the prelude file functionality.
+   *
+   * <p>This is in a separate BuildViewTestCase because we override the prelude label for the test.
+   * (The prelude label is configured differently between Bazel and Blaze.)
+   */
+  @RunWith(JUnit4.class)
+  public static class PreludeTest extends BuildViewTestCase {
+
+    private final CustomInMemoryFs fs = new CustomInMemoryFs(new ManualClock());
+
+    @Override
+    protected FileSystem createFileSystem() {
+      return fs;
+    }
+
+    @Override
+    protected ConfiguredRuleClassProvider createRuleClassProvider() {
+      ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
+      // addStandardRules() may call setPrelude(), so do it first.
+      TestRuleClassProvider.addStandardRules(builder);
+      builder.setPrelude("//tools/build_rules:test_prelude");
+      return builder.build();
+    }
+
+    @Test
+    public void testPreludeDefinedSymbolIsUsable() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo)");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    @Test
+    public void testPreludeAutomaticallyReexportsLoadedSymbols() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "load('//util:common.bzl', 'foo')");
+      scratch.file("util/BUILD");
+      scratch.file(
+          "util/common.bzl", //
+          "foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo)");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    // TODO(brandjon): Invert this test once the prelude is a module instead of a syntactic
+    // mutation on BUILD files.
+    @Test
+    public void testPreludeCanExportUnderscoreSymbols() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "_foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(_foo)");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    @Test
+    public void testPreludeCanShadowPredeclareds() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "cc_library = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(cc_library)");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    @Test
+    public void testPreludeSymbolCannotBeMutated() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "foo = ['FOO']");
+      scratch.file(
+          "pkg/BUILD", //
+          "foo.append('BAR')");
+
+      reporter.removeHandler(failFastHandler);
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("trying to mutate a frozen list value");
+    }
+
+    @Test
+    public void testPreludeCanAccessBzlDialectFeatures() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      // Test both bzl symbols and syntax (e.g. function defs).
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "def foo():",
+          "    return native.glob");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo())");
+
+      getConfiguredTarget("//pkg:BUILD");
+      // Prelude can access native.glob (though only a BUILD thread can call it).
+      assertContainsEvent("<built-in method glob of native value>");
+    }
+
+    @Test
+    public void testPreludeNeedNotBePresent() throws Exception {
+      scratch.file(
+          "pkg/BUILD", //
+          "print('FOO')");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    @Test
+    public void testPreludeNeedNotBePresent_evenWhenPackageIs() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "pkg/BUILD", //
+          "print('FOO')");
+
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    @Test
+    public void testPreludeFileNotRecognizedWithoutPackage() throws Exception {
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo)");
+
+      // The prelude file is not found without a corresponding package to contain it. BUILD files
+      // get processed as if no prelude file is present.
+      reporter.removeHandler(failFastHandler);
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("name 'foo' is not defined");
+    }
+
+    @Test
+    public void testPreludeFailsWhenErrorInPreludeFile() throws Exception {
+      scratch.file("tools/build_rules/BUILD");
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "1//0", // <-- dynamic error
+          "foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo)");
+
+      reporter.removeHandler(failFastHandler);
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent(
+          "File \"/workspace/tools/build_rules/test_prelude\", line 1, column 2, in <toplevel>");
+      assertContainsEvent("Error: integer division by zero");
+    }
+
+    @Test
+    public void testPreludeWorksEvenWhenPreludePackageInError() throws Exception {
+      scratch.file(
+          "tools/build_rules/BUILD", //
+          "1//0"); // <-- dynamic error
+      scratch.file(
+          "tools/build_rules/test_prelude", //
+          "foo = 'FOO'");
+      scratch.file(
+          "pkg/BUILD", //
+          "print(foo)");
+
+      // Succeeds because prelude loading is only dependent on the prelude package's existence, not
+      // its evaluation.
+      getConfiguredTarget("//pkg:BUILD");
+      assertContainsEvent("FOO");
+    }
+
+    // Another hypothetical test case we could try: Confirm that it's possible to explicitly load
+    // the prelude file as a regular .bzl. We don't bother testing this use case because, aside from
+    // being arguably pathological, it is currently impossible in practice: The prelude label
+    // doesn't end with ".bzl" and isn't configurable by the user. We also want to eliminate the
+    // prelude, so there's no intention of adding such a feature.
+
+    // Another possible test case: Verify how prelude applies to WORKSPACE files.
+  }
+
   private static class CustomInMemoryFs extends InMemoryFileSystem {
     private abstract static class FileStatusOrException {
       abstract FileStatus get() throws IOException;
@@ -1256,7 +1602,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     private final Map<Path, IOException> pathsToErrorOnGetInputStream = Maps.newHashMap();
 
     public CustomInMemoryFs(ManualClock manualClock) {
-      super(manualClock);
+      super(manualClock, DigestHashFunction.SHA256);
     }
 
     public void stubStat(Path path, @Nullable FileStatus stubbedResult) {

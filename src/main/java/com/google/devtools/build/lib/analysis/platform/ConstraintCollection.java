@@ -31,20 +31,19 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
-import com.google.devtools.build.lib.skylarkbuildapi.platform.ConstraintCollectionApi;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.EvalUtils;
-import com.google.devtools.build.lib.syntax.Printer;
-import com.google.devtools.build.lib.syntax.Sequence;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkList;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.starlarkbuildapi.platform.ConstraintCollectionApi;
 import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Printer;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkList;
+import net.starlark.java.eval.StarlarkSemantics;
 
 /** A collection of constraint values. */
 @Immutable
@@ -106,6 +105,11 @@ public abstract class ConstraintCollection
       ImmutableMap<ConstraintSettingInfo, ConstraintValueInfo> constraints)
       throws DuplicateConstraintException {
     return builder().parent(parent).addConstraints(constraints).build();
+  }
+
+  @Override
+  public boolean isImmutable() {
+    return true; // immutable and Starlark-hashable
   }
 
   /**
@@ -172,7 +176,7 @@ public abstract class ConstraintCollection
     if (!(key instanceof ConstraintSettingInfo)) {
       throw Starlark.errorf(
           "Constraint names must be platform_common.ConstraintSettingInfo, got %s instead",
-          EvalUtils.getDataTypeName(key));
+          Starlark.type(key));
     }
 
     return (ConstraintSettingInfo) key;

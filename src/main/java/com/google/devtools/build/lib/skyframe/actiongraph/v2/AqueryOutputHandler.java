@@ -24,7 +24,7 @@ import com.google.devtools.build.lib.analysis.AnalysisProtosV2.Target;
 import java.io.IOException;
 
 /** Outputs various messages of analysis_v2.proto. */
-public interface AqueryOutputHandler {
+public interface AqueryOutputHandler extends AutoCloseable {
   /** Defines the types of proto output this class can handle. */
   enum OutputType {
     BINARY("proto"),
@@ -39,6 +39,18 @@ public interface AqueryOutputHandler {
 
     public String formatName() {
       return formatName;
+    }
+
+    public static OutputType fromString(String string) throws InvalidAqueryOutputFormatException {
+      switch (string) {
+        case "proto":
+          return BINARY;
+        case "textproto":
+          return TEXT;
+        case "jsonproto":
+          return JSON;
+      }
+      throw new InvalidAqueryOutputFormatException("Invalid aquery output format: " + string);
     }
   }
 
@@ -59,5 +71,6 @@ public interface AqueryOutputHandler {
   void outputPathFragment(PathFragment message) throws IOException;
 
   /** Called at the end of the query process. */
+  @Override
   void close() throws IOException;
 }

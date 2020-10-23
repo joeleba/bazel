@@ -18,14 +18,18 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.testutil.TestConstants.PLATFORM_LABEL;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
+import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration.TestOptions;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.Type;
@@ -34,6 +38,8 @@ import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunctio
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.QueryParser;
+import com.google.devtools.build.lib.server.FailureDetails.ConfigurableQuery.Code;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import java.util.Collections;
@@ -97,9 +103,10 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   }
 
   @Override
-  protected String evalThrows(String query, boolean unconditionallyThrows) throws Exception {
+  protected EvalThrowsResult evalThrows(String query, boolean unconditionallyThrows)
+      throws Exception {
     maybeParseUniverseScope(query);
-    String queryResult = super.evalThrows(query, unconditionallyThrows);
+    EvalThrowsResult queryResult = super.evalThrows(query, unconditionallyThrows);
     if (!getHelper().isWholeTestUniverse()) {
       helper.setUniverseScope(getDefaultUniverseScope());
     }
@@ -109,7 +116,7 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   // Parse the universe if the universe has not been set manually through the helper.
   private void maybeParseUniverseScope(String query) throws Exception {
     if (!getHelper()
-        .getUniverseScope()
+        .getUniverseScopeAsStringList()
         .equals(Collections.singletonList(getDefaultUniverseScope()))) {
       return;
     }
@@ -161,9 +168,11 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   @Test
   public void testBadTargetLiterals() throws Exception {
     getHelper().turnOffFailFast();
-    super.testBadTargetLiterals();
+    // Post-analysis query test infrastructure clobbers certain detailed failures.
+    runBadTargetLiteralsTest(/*checkDetailedCode=*/ false);
   }
 
+  @SuppressWarnings("TruthIncompatibleType")
   @Override
   @Test
   public void testNoImplicitDeps() throws Exception {
@@ -206,7 +215,7 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
     assertThat(evalToListOfStrings("deps(//test:my_rule)"))
         .containsAtLeastElementsIn(evalToListOfStrings(explicits));
     assertThat(evalToListOfStrings("deps(//test:my_rule)"))
-        .doesNotContain(evalToListOfStrings(implicits));
+        .containsNoneIn(evalToListOfStrings(implicits));
   }
 
   @Test
@@ -255,7 +264,7 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
     assertThat(evalToListOfStrings("deps(//test:my_rule)"))
         .containsAtLeastElementsIn(evalToListOfStrings(explicits));
     assertThat(evalToListOfStrings("deps(//test:my_rule)"))
-        .doesNotContain(evalToListOfStrings(implicits));
+        .containsNoneIn(evalToListOfStrings(implicits));
   }
 
   // Regression test for b/148550864
@@ -348,10 +357,15 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
     }
 
     @Override
-    public BuildOptions patch(BuildOptions options) {
-      BuildOptions result = options.clone();
+    public ImmutableSet<Class<? extends FragmentOptions>> requiresOptionFragments() {
+      return ImmutableSet.of(TestOptions.class);
+    }
+
+    @Override
+    public BuildOptions patch(BuildOptionsView options, EventHandler eventHandler) {
+      BuildOptionsView result = options.clone();
       result.get(TestOptions.class).testArguments = Collections.singletonList(toOption);
-      return result;
+      return result.underlying();
     }
   }
 
@@ -414,6 +428,41 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
         .isNotEqualTo(getConfiguration(Iterables.getOnlyElement(eval("//test:top-level"))));
   }
 
+  private void writeSimpleTarget() throws Exception {
+    MockRule simpleRule =
+        () ->
+            MockRule.define(
+                "simple_rule", attr("dep", LABEL).allowedFileTypes(FileTypeSet.ANY_FILE));
+    helper.useRuleClassProvider(setRuleClassProviders(simpleRule).build());
+
+    writeFile("test/BUILD", "simple_rule(name = 'target')");
+  }
+
+  @Test
+  public void testVisibleFunctionDoesNotWork() throws Exception {
+    writeSimpleTarget();
+    EvalThrowsResult result = evalThrows("visible(//test:target, //test:*)", true);
+    assertThat(result.getMessage()).isEqualTo("visible() is not supported on configured targets");
+    assertConfigurableQueryCode(result.getFailureDetail(), Code.VISIBLE_FUNCTION_NOT_SUPPORTED);
+  }
+
+  @Test
+  public void testSiblingsFunctionDoesNotWork() throws Exception {
+    writeSimpleTarget();
+    EvalThrowsResult result = evalThrows("siblings(//test:target)", true);
+    assertThat(result.getMessage()).isEqualTo("siblings() not supported for post analysis queries");
+    assertConfigurableQueryCode(result.getFailureDetail(), Code.SIBLINGS_FUNCTION_NOT_SUPPORTED);
+  }
+
+  @Test
+  public void testBuildfilesFunctionDoesNotWork() throws Exception {
+    writeSimpleTarget();
+    EvalThrowsResult result = evalThrows("buildfiles(//test:target)", true);
+    assertThat(result.getMessage())
+        .isEqualTo("buildfiles() doesn't make sense for the configured target graph");
+    assertConfigurableQueryCode(result.getFailureDetail(), Code.BUILDFILES_FUNCTION_NOT_SUPPORTED);
+  }
+
   // LabelListAttr not currently supported.
   @Override
   public void testLabelsOperator() {}
@@ -456,10 +505,10 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   public void testTestsOperatorReportsMissingTargets() {}
 
   @Override
-  public void testCycleInSkylark() {}
+  public void testCycleInStarlark() {}
 
   @Override
-  public void testCycleInSkylarkParentDir() {}
+  public void testCycleInStarlarkParentDir() {}
 
   @Override
   public void testCycleInSubpackage() {}
@@ -583,19 +632,19 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   // siblings() operator.
 
   @Override
-  public void testSiblings_DuplicatePackages() {}
+  public void testSiblings_duplicatePackages() {}
 
   @Override
-  public void testSiblings_SamePackageRdeps() {}
+  public void testSiblings_samePackageRdeps() {}
 
   @Override
-  public void testSiblings_MatchesTargetNamedAll() {}
+  public void testSiblings_matchesTargetNamedAll() {}
 
   @Override
-  public void testSiblings_Simple() {}
+  public void testSiblings_simple() {}
 
   @Override
-  public void testSiblings_WithBuildfiles() {}
+  public void testSiblings_withBuildfiles() {}
 
   // same_pkg_direct_rdeps() operator.
 
@@ -639,10 +688,14 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   // We don't support --nodep_deps=false.
   @Override
   @Test
-  public void testNodepDeps_False() throws Exception {}
+  public void testNodepDeps_false() throws Exception {}
 
   // package_group instances have a null configuration and are filtered out by --host_deps=false.
   @Override
   @Test
-  public void testDefaultVisibilityReturnedInDeps_NonEmptyDependencyFilter() throws Exception {}
+  public void testDefaultVisibilityReturnedInDeps_nonEmptyDependencyFilter() throws Exception {}
+
+  protected static void assertConfigurableQueryCode(FailureDetail failureDetail, Code code) {
+    assertThat(failureDetail.getConfigurableQuery().getCode()).isEqualTo(code);
+  }
 }

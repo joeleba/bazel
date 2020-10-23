@@ -15,15 +15,16 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.syntax.ClassObject;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkFunction;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
+import net.starlark.java.eval.ClassObject;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkFunction;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /**
  * A helper class for calling Starlark functions from Java, where the argument values are supplied
@@ -61,19 +62,16 @@ public class StarlarkCallbackHelper {
   }
 
   public ImmutableList<String> getParameterNames() {
-    return callback.getSignature().getParameterNames();
+    return callback.getParameterNames();
   }
 
   // TODO(adonovan): opt: all current callers are forced to construct a temporary ClassObject.
   // Instead, make them supply a map.
   public Object call(EventHandler eventHandler, ClassObject ctx, Object... arguments)
       throws EvalException, InterruptedException {
-    try (Mutability mutability = Mutability.create("callback", callback)) {
-      StarlarkThread thread =
-          StarlarkThread.builder(mutability)
-              .setSemantics(starlarkSemantics)
-              .build();
-      thread.setPrintHandler(StarlarkThread.makeDebugPrintHandler(eventHandler));
+    try (Mutability mu = Mutability.create("callback", callback)) {
+      StarlarkThread thread = new StarlarkThread(mu, starlarkSemantics);
+      thread.setPrintHandler(Event.makeDebugPrintHandler(eventHandler));
       context.storeInThread(thread);
       return Starlark.call(
           thread,
@@ -81,7 +79,7 @@ public class StarlarkCallbackHelper {
           buildArgumentList(ctx, arguments),
           /*kwargs=*/ ImmutableMap.of());
     } catch (ClassCastException | IllegalArgumentException e) { // TODO(adonovan): investigate
-      throw new EvalException(null, e.getMessage());
+      throw new EvalException(e);
     }
   }
 

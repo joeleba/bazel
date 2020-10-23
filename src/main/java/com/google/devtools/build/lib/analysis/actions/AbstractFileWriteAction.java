@@ -1,4 +1,4 @@
-// Copyright 2014 The Bazel Authors. All rights reserved.
+// Copyright 2020 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 package com.google.devtools.build.lib.analysis.actions;
 
 import com.google.common.collect.ImmutableSet;
@@ -25,14 +24,9 @@ import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
-import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.protobuf.ByteString;
-import java.io.IOException;
-import java.io.OutputStream;
 import javax.annotation.Nullable;
 
 /**
@@ -66,15 +60,7 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
       ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     try {
-      DeterministicWriter deterministicWriter;
-      try {
-        deterministicWriter = newDeterministicWriter(actionExecutionContext);
-      } catch (IOException e) {
-        // Message is a bit misleading but is good enough for the end user.
-        throw new EnvironmentalExecException(
-            "Failed to write '" + getPrimaryOutput().prettyPrint() + "'", e);
-      }
-
+      DeterministicWriter deterministicWriter = newDeterministicWriter(actionExecutionContext);
       FileWriteActionContext context = getStrategy(actionExecutionContext);
       SpawnContinuation first =
           context.beginWriteOutputToFile(
@@ -104,8 +90,6 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
             }
           } catch (ExecException e) {
             throw e.toActionExecutionException(
-                "Writing file for rule '" + Label.print(getOwner().getLabel()) + "'",
-                actionExecutionContext.getVerboseFailures(),
                 AbstractFileWriteAction.this);
           }
           afterWrite(actionExecutionContext);
@@ -114,8 +98,6 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
       };
     } catch (ExecException e) {
       throw e.toActionExecutionException(
-          "Writing file for rule '" + Label.print(getOwner().getLabel()) + "'",
-          actionExecutionContext.getVerboseFailures(),
           this);
     }
   }
@@ -123,10 +105,10 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
   /**
    * Produce a DeterministicWriter that can write the file to an OutputStream deterministically.
    *
-   * @param ctx context for use with creating the writer.  
+   * @param ctx context for use with creating the writer.
    */
   public abstract DeterministicWriter newDeterministicWriter(ActionExecutionContext ctx)
-      throws IOException, InterruptedException, ExecException;
+      throws InterruptedException, ExecException;
 
   /**
    * This hook is called after the File has been successfully written to disk.
@@ -143,7 +125,7 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
 
   @Override
   protected String getRawProgressMessage() {
-    return "Writing " + (makeExecutable ? "script " : "file ")
+    return (makeExecutable ? "Writing script " : "Writing file ")
         + Iterables.getOnlyElement(getOutputs()).prettyPrint();
   }
 
@@ -160,21 +142,4 @@ public abstract class AbstractFileWriteAction extends AbstractAction {
     return actionContextRegistry.getContext(FileWriteActionContext.class);
   }
 
-  /**
-   * A deterministic writer writes bytes to an output stream. The same byte stream is written
-   * on every invocation of writeOutputFile().
-   */
-  public interface DeterministicWriter {
-    void writeOutputFile(OutputStream out) throws IOException;
-
-    /**
-     * Returns the contents that would be written, as a {@link ByteString}. Used when the caller
-     * wants a {@link ByteString} in the end, to avoid making unnecessary copies.
-     */
-    default ByteString getBytes() throws IOException {
-      ByteString.Output out = ByteString.newOutput();
-      writeOutputFile(out);
-      return out.toByteString();
-    }
-  }
 }

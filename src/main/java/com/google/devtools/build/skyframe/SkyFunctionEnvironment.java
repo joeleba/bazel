@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
+
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -21,6 +22,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.collect.compacthashmap.CompactHashMap;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -32,10 +34,10 @@ import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.skyframe.EvaluationProgressReceiver.EvaluationState;
-import com.google.devtools.build.skyframe.GraphInconsistencyReceiver.Inconsistency;
 import com.google.devtools.build.skyframe.NodeEntry.DependencyState;
 import com.google.devtools.build.skyframe.ParallelEvaluatorContext.EnqueueParentBehavior;
 import com.google.devtools.build.skyframe.QueryableGraph.Reason;
+import com.google.devtools.build.skyframe.proto.GraphInconsistency.Inconsistency;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -153,6 +155,7 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
           }
         }
       };
+
   private final ParallelEvaluatorContext evaluatorContext;
 
   SkyFunctionEnvironment(
@@ -283,8 +286,8 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
       eventBuilder.addTransitive(ValueWithMetadata.getEvents(value));
       postBuilder.addTransitive(ValueWithMetadata.getPosts(value));
     }
-    NestedSet<TaggedEvents> taggedEvents = eventBuilder.build();
-    NestedSet<Postable> postables = postBuilder.build();
+    NestedSet<TaggedEvents> taggedEvents = eventBuilder.buildInterruptibly();
+    NestedSet<Postable> postables = postBuilder.buildInterruptibly();
     evaluatorContext.getReplayingNestedSetEventVisitor().visit(taggedEvents);
     evaluatorContext.getReplayingNestedSetPostableVisitor().visit(postables);
     return Pair.of(taggedEvents, postables);
@@ -354,9 +357,12 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
    */
   private Map<SkyKey, SkyValue> getValuesFromErrorOrDepsOrGraph(Iterable<? extends SkyKey> keys)
       throws InterruptedException {
-    // Uses a HashMap, not an ImmutableMap.Builder, because we have not yet deduplicated these keys
+    // Do not use an ImmutableMap.Builder, because we have not yet deduplicated these keys
     // and ImmutableMap.Builder does not tolerate duplicates.
-    Map<SkyKey, SkyValue> result = new HashMap<>();
+    Map<SkyKey, SkyValue> result =
+        keys instanceof Collection
+            ? CompactHashMap.createWithExpectedSize(((Collection<?>) keys).size())
+            : new HashMap<>();
     Set<SkyKey> missingKeys = new HashSet<>();
     newlyRequestedDeps.startGroup();
     for (SkyKey key : keys) {
@@ -868,6 +874,11 @@ class SkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
         .add("bubbleErrorInfo", bubbleErrorInfo)
         .add("evaluatorContext", evaluatorContext)
         .toString();
+  }
+
+  @Override
+  public boolean restartPermitted() {
+    return evaluatorContext.restartPermitted();
   }
 
   /** Thrown during environment construction if previously requested deps are no longer done. */

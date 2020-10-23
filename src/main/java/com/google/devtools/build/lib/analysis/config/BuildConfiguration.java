@@ -14,13 +14,11 @@
 
 package com.google.devtools.build.lib.analysis.config;
 
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ClassToInstanceMap;
 import com.google.common.collect.ImmutableCollection;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
@@ -32,10 +30,9 @@ import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BuildConfigurationEvent;
 import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
-import com.google.devtools.build.lib.buildeventstream.BuildEventId;
+import com.google.devtools.build.lib.buildeventstream.BuildEventIdUtil;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
@@ -43,10 +40,7 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkbuildapi.BuildConfigurationApi;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.syntax.StarlarkValue;
+import com.google.devtools.build.lib.starlarkbuildapi.BuildConfigurationApi;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -59,7 +53,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Supplier;
-import javax.annotation.Nullable;
+import net.starlark.java.annot.StarlarkAnnotations;
+import net.starlark.java.annot.StarlarkBuiltin;
 
 /**
  * Instances of BuildConfiguration represent a collection of context information which may affect a
@@ -103,39 +98,12 @@ public class BuildConfiguration implements BuildConfigurationApi {
     ActionEnvironment getActionEnvironment(BuildOptions options);
   }
 
-  /**
-   * An interface for language-specific configurations.
-   *
-   * <p>All implementations must be immutable and communicate this as clearly as possible (e.g.
-   * declare {@link ImmutableList} signatures on their interfaces vs. {@link List}). This is because
-   * fragment instances may be shared across configurations.
-   *
-   * <p>Fragments are Starlark values, as returned by {@code ctx.fragments.android}, for example.
-   */
-  public abstract static class Fragment implements StarlarkValue {
-    /**
-     * Validates the options for this Fragment. Issues warnings for the use of deprecated options,
-     * and warnings or errors for any option settings that conflict.
-     */
-    @SuppressWarnings("unused")
-    public void reportInvalidOptions(EventHandler reporter, BuildOptions buildOptions) {}
-
-    /**
-     * Returns a fragment of the output directory name for this configuration. The output directory
-     * for the whole configuration contains all the short names by all fragments.
-     */
-    @Nullable
-    public String getOutputDirectoryName() {
-      return null;
-    }
-  }
-
   private final OutputDirectories outputDirectories;
 
   private final ImmutableSortedMap<Class<? extends Fragment>, Fragment> fragments;
   private final FragmentClassSet fragmentClassSet;
 
-  private final ImmutableMap<String, Class<? extends Fragment>> skylarkVisibleFragments;
+  private final ImmutableMap<String, Class<? extends Fragment>> starlarkVisibleFragments;
   private final RepositoryName mainRepositoryName;
   private final ImmutableSet<String> reservedActionMnemonics;
   private CommandLineLimits commandLineLimits;
@@ -162,6 +130,8 @@ public class BuildConfiguration implements BuildConfigurationApi {
   private final TransitiveOptionDetails transitiveOptionDetails;
 
   private final Supplier<BuildConfigurationEvent> buildEventSupplier;
+
+  private final boolean siblingRepositoryLayout;
 
   /**
    * Returns true if this configuration is semantically equal to the other, with the possible
@@ -198,7 +168,7 @@ public class BuildConfiguration implements BuildConfigurationApi {
       return false;
     }
     BuildConfiguration otherConfig = (BuildConfiguration) other;
-    return fragments.values().equals(otherConfig.fragments.values())
+    return fragments.values().asList().equals(otherConfig.fragments.values().asList())
         && buildOptions.equals(otherConfig.buildOptions);
   }
 
@@ -259,7 +229,8 @@ public class BuildConfiguration implements BuildConfigurationApi {
       BuildOptions.OptionsDiffForReconstruction buildOptionsDiff,
       ImmutableSet<String> reservedActionMnemonics,
       ActionEnvironment actionEnvironment,
-      String repositoryName) {
+      String repositoryName,
+      boolean siblingRepositoryLayout) {
     this(
         directories,
         fragmentsMap,
@@ -267,7 +238,8 @@ public class BuildConfiguration implements BuildConfigurationApi {
         buildOptionsDiff,
         reservedActionMnemonics,
         actionEnvironment,
-        RepositoryName.createFromValidStrippedName(repositoryName));
+        RepositoryName.createFromValidStrippedName(repositoryName),
+        siblingRepositoryLayout);
   }
 
   @AutoCodec.VisibleForSerialization
@@ -279,17 +251,20 @@ public class BuildConfiguration implements BuildConfigurationApi {
       BuildOptions.OptionsDiffForReconstruction buildOptionsDiff,
       ImmutableSet<String> reservedActionMnemonics,
       ActionEnvironment actionEnvironment,
-      RepositoryName mainRepositoryName) {
+      RepositoryName mainRepositoryName,
+      boolean siblingRepositoryLayout) {
     // this.directories = directories;
     this.fragments = makeFragmentsMap(fragmentsMap);
     this.fragmentClassSet = FragmentClassSet.of(this.fragments.keySet());
-    this.skylarkVisibleFragments = buildIndexOfSkylarkVisibleFragments();
+    this.starlarkVisibleFragments = buildIndexOfStarlarkVisibleFragments();
     this.buildOptions = buildOptions.clone();
     this.buildOptionsDiff = buildOptionsDiff;
     this.options = buildOptions.get(CoreOptions.class);
     this.outputDirectories =
-        new OutputDirectories(directories, options, fragments, mainRepositoryName);
+        new OutputDirectories(
+            directories, options, fragments, mainRepositoryName, siblingRepositoryLayout);
     this.mainRepositoryName = mainRepositoryName;
+    this.siblingRepositoryLayout = siblingRepositoryLayout;
 
     // We can't use an ImmutableMap.Builder here; we need the ability to add entries with keys that
     // are already in the map so that the same define can be specified on the command line twice,
@@ -318,8 +293,10 @@ public class BuildConfiguration implements BuildConfigurationApi {
     // the bin directory and the genfiles directory
     // These variables will be used on Windows as well, so we need to make sure
     // that paths use the correct system file-separator.
-    globalMakeEnvBuilder.put("BINDIR", getBinDirectory().getExecPath().getPathString());
-    globalMakeEnvBuilder.put("GENDIR", getGenfilesDirectory().getExecPath().getPathString());
+    globalMakeEnvBuilder.put(
+        "BINDIR", getBinDirectory(RepositoryName.MAIN).getExecPath().getPathString());
+    globalMakeEnvBuilder.put(
+        "GENDIR", getGenfilesDirectory(RepositoryName.MAIN).getExecPath().getPathString());
     globalMakeEnv = globalMakeEnvBuilder.build();
 
     checksum = buildOptions.computeChecksum();
@@ -355,7 +332,8 @@ public class BuildConfiguration implements BuildConfigurationApi {
             BuildOptions.diffForReconstruction(defaultBuildOptions, options),
             reservedActionMnemonics,
             actionEnv,
-            mainRepositoryName.strippedName());
+            mainRepositoryName.strippedName(),
+            siblingRepositoryLayout);
     return newConfig;
   }
 
@@ -363,24 +341,24 @@ public class BuildConfiguration implements BuildConfigurationApi {
   public static Set<Class<? extends FragmentOptions>> getOptionsClasses(
       Iterable<Class<? extends Fragment>> fragmentClasses, RuleClassProvider ruleClassProvider) {
 
-    Multimap<Class<? extends BuildConfiguration.Fragment>, Class<? extends FragmentOptions>>
+    Multimap<Class<? extends Fragment>, Class<? extends FragmentOptions>>
         fragmentToRequiredOptions = ArrayListMultimap.create();
     for (ConfigurationFragmentFactory fragmentLoader :
-        ((ConfiguredRuleClassProvider) ruleClassProvider).getConfigurationFragments()) {
+        ((FragmentProvider) ruleClassProvider).getConfigurationFragments()) {
       fragmentToRequiredOptions.putAll(fragmentLoader.creates(), fragmentLoader.requiredOptions());
     }
     Set<Class<? extends FragmentOptions>> options = new HashSet<>();
-    for (Class<? extends BuildConfiguration.Fragment> fragmentClass : fragmentClasses) {
+    for (Class<? extends Fragment> fragmentClass : fragmentClasses) {
       options.addAll(fragmentToRequiredOptions.get(fragmentClass));
     }
     return options;
   }
 
-  private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfSkylarkVisibleFragments() {
+  private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfStarlarkVisibleFragments() {
     ImmutableMap.Builder<String, Class<? extends Fragment>> builder = ImmutableMap.builder();
 
     for (Class<? extends Fragment> fragmentClass : fragments.keySet()) {
-      SkylarkModule module = SkylarkInterfaceUtils.getSkylarkModule(fragmentClass);
+      StarlarkBuiltin module = StarlarkAnnotations.getStarlarkBuiltin(fragmentClass);
       if (module != null) {
         builder.put(module.name(), fragmentClass);
       }
@@ -402,48 +380,63 @@ public class BuildConfiguration implements BuildConfigurationApi {
     return outputDirectories.getOutputDirectory();
   }
 
+  /** @deprecated Use {@link #getBinDirectory} instead. */
   @Override
+  @Deprecated
   public ArtifactRoot getBinDir() {
-    return outputDirectories.getBinDirectory();
-  }
-
-  /** Returns the bin directory for this build configuration. */
-  public ArtifactRoot getBinDirectory() {
-    return outputDirectories.getBinDirectory();
+    return outputDirectories.getBinDirectory(RepositoryName.MAIN);
   }
 
   /**
-   * TODO(kchodorow): This (and the other get*Directory functions) won't work with external
+   * Returns the bin directory for this build configuration.
+   *
+   * <p>TODO(kchodorow): This (and the other get*Directory functions) won't work with external
    * repositories without changes to how ArtifactFactory resolves derived roots. This is not an
    * issue right now because it only effects Blaze's include scanning (internal) and Bazel's
    * repositories (external) but will need to be fixed.
+   *
+   * @deprecated Use {@code RuleContext#getBinDirectory} instead whenever possible.
    */
+  @Deprecated
   public ArtifactRoot getBinDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getBinDirectory();
+    return outputDirectories.getBinDirectory(repositoryName);
   }
 
-  /** Returns a relative path to the bin directory at execution time. */
-  public PathFragment getBinFragment() {
-    return outputDirectories.getBinDirectory().getExecPath();
+  /**
+   * Returns a relative path to the bin directory at execution time.
+   *
+   * @deprecated Use {@code RuleContext#getBinFragment} instead whenever possible.
+   */
+  @Deprecated
+  public PathFragment getBinFragment(RepositoryName repositoryName) {
+    return outputDirectories.getBinDirectory(repositoryName).getExecPath();
   }
 
-  /** Returns the include directory for this build configuration. */
+  /**
+   * Returns the include directory for this build configuration.
+   *
+   * @deprecated Use {@code RuleContext#getIncludeDirectory} instead whenever possible.
+   */
+  @Deprecated
   public ArtifactRoot getIncludeDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getIncludeDirectory();
+    return outputDirectories.getIncludeDirectory(repositoryName);
   }
 
+  /** @deprecated Use {@link #getGenfilesDirectory} instead. */
   @Override
+  @Deprecated
   public ArtifactRoot getGenfilesDir() {
-    return outputDirectories.getGenfilesDirectory();
+    return outputDirectories.getGenfilesDirectory(RepositoryName.MAIN);
   }
 
-  /** Returns the genfiles directory for this build configuration. */
-  public ArtifactRoot getGenfilesDirectory() {
-    return outputDirectories.getGenfilesDirectory();
-  }
-
+  /**
+   * Returns the genfiles directory for this build configuration.
+   *
+   * @deprecated Use {@code RuleContext#getGenfilesDirectory} instead whenever possible.
+   */
+  @Deprecated
   public ArtifactRoot getGenfilesDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getGenfilesDirectory();
+    return outputDirectories.getGenfilesDirectory(repositoryName);
   }
 
   public boolean hasSeparateGenfilesDirectory() {
@@ -454,19 +447,32 @@ public class BuildConfiguration implements BuildConfigurationApi {
    * Returns the directory where coverage-related artifacts and metadata files should be stored.
    * This includes for example uninstrumented class files needed for Jacoco's coverage reporting
    * tools.
+   *
+   * @deprecated Use {@code RuleContext#getCoverageMetadataDirectory} instead whenever possible.
    */
+  @Deprecated
   public ArtifactRoot getCoverageMetadataDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getCoverageMetadataDirectory();
+    return outputDirectories.getCoverageMetadataDirectory(repositoryName);
   }
 
-  /** Returns the testlogs directory for this build configuration. */
+  /**
+   * Returns the testlogs directory for this build configuration.
+   *
+   * @deprecated Use {@code RuleContext#getTestLogsDirectory} instead whenever possible.
+   */
+  @Deprecated
   public ArtifactRoot getTestLogsDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getTestLogsDirectory();
+    return outputDirectories.getTestLogsDirectory(repositoryName);
   }
 
-  /** Returns a relative path to the genfiles directory at execution time. */
-  public PathFragment getGenfilesFragment() {
-    return outputDirectories.getGenfilesFragment();
+  /**
+   * Returns a relative path to the genfiles directory at execution time.
+   *
+   * @deprecated Use {@code RuleContext#getGenfilesFragment} instead whenever possible.
+   */
+  @Deprecated
+  public PathFragment getGenfilesFragment(RepositoryName repositoryName) {
+    return outputDirectories.getGenfilesFragment(repositoryName);
   }
 
   /**
@@ -480,9 +486,14 @@ public class BuildConfiguration implements BuildConfigurationApi {
     return outputDirectories.getHostPathSeparator();
   }
 
-  /** Returns the internal directory (used for middlemen) for this build configuration. */
+  /**
+   * Returns the internal directory (used for middlemen) for this build configuration.
+   *
+   * @deprecated Use {@code RuleContext#getMiddlemanDirectory} instead whenever possible.
+   */
+  @Deprecated
   public ArtifactRoot getMiddlemanDirectory(RepositoryName repositoryName) {
-    return outputDirectories.getMiddlemanDirectory();
+    return outputDirectories.getMiddlemanDirectory(repositoryName);
   }
 
   public boolean isStrictFilesets() {
@@ -513,6 +524,10 @@ public class BuildConfiguration implements BuildConfigurationApi {
 
   public ActionEnvironment getActionEnvironment() {
     return actionEnv;
+  }
+
+  public boolean isSiblingRepositoryLayout() {
+    return siblingRepositoryLayout;
   }
 
   /**
@@ -688,6 +703,10 @@ public class BuildConfiguration implements BuildConfigurationApi {
     return options.collectCodeCoverage;
   }
 
+  public boolean experimentalForwardInstrumentedFilesInfoByDefault() {
+    return options.experimentalForwardInstrumentedFilesInfoByDefault;
+  }
+
   public RunUnder getRunUnder() {
     return options.runUnder;
   }
@@ -733,18 +752,6 @@ public class BuildConfiguration implements BuildConfigurationApi {
 
   public List<Label> getActionListeners() {
     return options.actionListeners;
-  }
-
-  public boolean inmemoryUnusedInputsList() {
-    return options.inmemoryUnusedInputsList;
-  }
-
-  /**
-   * Returns whether FileWriteAction may transparently compress its contents in the analysis phase
-   * to save memory. Semantics are not affected.
-   */
-  public FileWriteAction.Compression transparentCompression() {
-    return FileWriteAction.Compression.fromBoolean(options.transparentCompression);
   }
 
   /**
@@ -845,6 +852,10 @@ public class BuildConfiguration implements BuildConfigurationApi {
     return options.inprocessSymlinkCreation;
   }
 
+  public boolean enableAggregatingMiddleman() {
+    return options.enableAggregatingMiddleman;
+  }
+
   public boolean skipRunfilesManifests() {
     return options.skipRunfilesManifests;
   }
@@ -893,16 +904,20 @@ public class BuildConfiguration implements BuildConfigurationApi {
     return options.autoCpuEnvironmentGroup;
   }
 
-  public Class<? extends Fragment> getSkylarkFragmentByName(String name) {
-    return skylarkVisibleFragments.get(name);
+  public CoreOptions.FatApkSplitSanitizer getFatApkSplitSanitizer() {
+    return options.fatApkSplitSanitizer;
   }
 
-  public ImmutableCollection<String> getSkylarkFragmentNames() {
-    return skylarkVisibleFragments.keySet();
+  public Class<? extends Fragment> getStarlarkFragmentByName(String name) {
+    return starlarkVisibleFragments.get(name);
+  }
+
+  public ImmutableCollection<String> getStarlarkFragmentNames() {
+    return starlarkVisibleFragments.keySet();
   }
 
   public BuildEventId getEventId() {
-    return BuildEventId.configurationId(checksum());
+    return BuildEventIdUtil.configurationId(checksum());
   }
 
   public BuildConfigurationEvent toBuildEvent() {
@@ -914,7 +929,7 @@ public class BuildConfiguration implements BuildConfigurationApi {
     BuildEventStreamProtos.BuildEvent.Builder builder =
         BuildEventStreamProtos.BuildEvent.newBuilder();
     builder
-        .setId(eventId.asStreamProto())
+        .setId(eventId)
         .setConfiguration(
             BuildEventStreamProtos.Configuration.newBuilder()
                 .setMnemonic(getMnemonic())

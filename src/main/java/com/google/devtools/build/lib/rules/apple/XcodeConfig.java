@@ -24,22 +24,27 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
+import com.google.devtools.build.lib.analysis.XcodeConfigEvent;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions.AppleBitcodeMode;
 import com.google.devtools.build.lib.rules.apple.XcodeConfigInfo.Availability;
+import com.google.devtools.build.lib.xcode.proto.XcodeConfig.XcodeConfigRuleInfo;
+import com.google.devtools.build.lib.xcode.proto.XcodeConfig.XcodeVersionInfo;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /** Implementation for the {@code xcode_config} rule. */
 public class XcodeConfig implements RuleConfiguredTargetFactory {
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
   private static final DottedVersion MINIMUM_BITCODE_XCODE_VERSION =
       DottedVersion.fromStringUnchecked("7");
 
@@ -56,31 +61,30 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       throws InterruptedException, RuleErrorException, ActionConflictException {
     AppleConfiguration appleConfig = ruleContext.getFragment(AppleConfiguration.class);
     AppleCommandLineOptions appleOptions = appleConfig.getOptions();
+
+    XcodeConfigRuleInfo.Builder infoBuilder = XcodeConfigRuleInfo.newBuilder();
+    if (appleOptions.xcodeVersion != null) {
+      infoBuilder.setXcodeVersionFlag(appleOptions.xcodeVersion);
+    }
     XcodeVersionRuleData explicitDefaultVersion =
-        ruleContext.getPrerequisite(
-            XcodeConfigRule.DEFAULT_ATTR_NAME,
-            RuleConfiguredTarget.Mode.TARGET,
-            XcodeVersionRuleData.class);
+        ruleContext.getPrerequisite(XcodeConfigRule.DEFAULT_ATTR_NAME, XcodeVersionRuleData.class);
 
     List<XcodeVersionRuleData> explicitVersions =
-        (List<XcodeVersionRuleData>)
-            ruleContext.getPrerequisites(
-                XcodeConfigRule.VERSIONS_ATTR_NAME,
-                RuleConfiguredTarget.Mode.TARGET,
-                XcodeVersionRuleData.class);
+        ruleContext.getPrerequisites(
+            XcodeConfigRule.VERSIONS_ATTR_NAME, XcodeVersionRuleData.class);
+
     AvailableXcodesInfo remoteVersions =
         ruleContext.getPrerequisite(
             XcodeConfigRule.REMOTE_VERSIONS_ATTR_NAME,
-            RuleConfiguredTarget.Mode.TARGET,
             AvailableXcodesInfo.PROVIDER);
+
     AvailableXcodesInfo localVersions =
         ruleContext.getPrerequisite(
             XcodeConfigRule.LOCAL_VERSIONS_ATTR_NAME,
-            RuleConfiguredTarget.Mode.TARGET,
             AvailableXcodesInfo.PROVIDER);
 
     XcodeVersionProperties xcodeVersionProperties;
-    XcodeConfigInfo.Availability availability = null;
+    Availability availability = null;
     if (useAvailableXcodesMode(
         explicitVersions, explicitDefaultVersion, localVersions, remoteVersions, ruleContext)) {
       Map.Entry<XcodeVersionRuleData, Availability> xcode =
@@ -89,15 +93,31 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
               remoteVersions,
               ruleContext,
               appleOptions.xcodeVersion,
-              appleOptions.preferMutualXcode);
+              appleOptions.preferMutualXcode,
+              infoBuilder);
       xcodeVersionProperties = xcode.getKey().getXcodeVersionProperties();
       availability = xcode.getValue();
     } else {
       xcodeVersionProperties =
           resolveExplicitlyDefinedVersion(
-              explicitVersions, explicitDefaultVersion, appleOptions.xcodeVersion, ruleContext);
-      availability = XcodeConfigInfo.Availability.UNKNOWN;
+              explicitVersions,
+              explicitDefaultVersion,
+              appleOptions.xcodeVersion,
+              ruleContext,
+              infoBuilder);
+      availability = Availability.UNKNOWN;
     }
+    logger.atInfo().log("Using Xcode version %s", xcodeVersionProperties.getXcodeVersionString());
+    if (xcodeVersionProperties.getXcodeVersion().isPresent()) {
+      infoBuilder
+          .setSelectedVersion(xcodeVersionProperties.getXcodeVersionString())
+          .setSelectedVersionAvailability(
+              XcodeConfigRuleInfo.Availability.valueOf(availability.name()));
+    }
+    ruleContext
+        .getAnalysisEnvironment()
+        .getEventHandler()
+        .post(new XcodeConfigEvent(infoBuilder.build()));
     DottedVersion iosSdkVersion =
         (appleOptions.iosSdkVersion != null)
             ? DottedVersion.maybeUnwrap(appleOptions.iosSdkVersion)
@@ -203,7 +223,8 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       List<XcodeVersionRuleData> explicitVersions,
       XcodeVersionRuleData explicitDefaultVersion,
       String versionOverrideFlag,
-      RuleContext ruleContext)
+      RuleContext ruleContext,
+      XcodeConfigRuleInfo.Builder infoBuilder)
       throws RuleErrorException {
     if (explicitDefaultVersion != null
         && !Iterables.any(
@@ -224,12 +245,25 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       ruleContext.throwWithRuleError(
           "if any versions are specified, a default version must be specified");
     }
+    logger.atInfo().log(
+        "Determining Xcode version using single-location Xcodes mode: versions=[%s]",
+        printableXcodeVersions(explicitVersions));
+    for (XcodeVersionRuleData version : explicitVersions) {
+      infoBuilder.addExplicitVersions(
+          XcodeVersionInfo.newBuilder()
+              .setVersion(version.getVersion().toString())
+              .addAllAliases(version.getAliases())
+              .build());
+    }
+    infoBuilder.setDefaultVersion(explicitDefaultVersion.getVersion().toString());
+
     Map<String, XcodeVersionRuleData> aliasesToVersionMap = null;
     try {
       aliasesToVersionMap = aliasesToVersionMap(explicitVersions);
     } catch (XcodeConfigException e) {
-      ruleContext.throwWithRuleError(e.getMessage());
+      throw ruleContext.throwWithRuleError(e);
     }
+
     if (!Strings.isNullOrEmpty(versionOverrideFlag)) {
       // The version override flag is not necessarily an actual version - it may be a version
       // alias.
@@ -262,7 +296,8 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       AvailableXcodesInfo remoteVersions,
       RuleContext ruleContext,
       String versionOverrideFlag,
-      boolean preferMutualXcode)
+      boolean preferMutualXcode,
+      XcodeConfigRuleInfo.Builder infoBuilder)
       throws RuleErrorException {
 
     Map<String, XcodeVersionRuleData> localAliasesToVersionMap;
@@ -271,7 +306,7 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       localAliasesToVersionMap = aliasesToVersionMap(localVersions.getAvailableVersions());
       remoteAliasesToVersionMap = aliasesToVersionMap(remoteVersions.getAvailableVersions());
     } catch (XcodeConfigException e) {
-      throw ruleContext.throwWithRuleError(e.getMessage());
+      throw ruleContext.throwWithRuleError(e);
     }
     // Mutually available Xcode versions are versions that are available both locally and remotely,
     // but are referred to by the aliases listed in remote_xcodes.
@@ -281,13 +316,60 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
         mutuallyAvailableVersions.add(remoteAliasesToVersionMap.get(version));
       }
     }
+    logger.atInfo().log(
+        "Determining Xcode version using available Xcodes mode:"
+            + " local=[%s], remote=[%s], mutual=[%s]",
+        printableXcodeVersions(localVersions.getAvailableVersions()),
+        printableXcodeVersions(remoteVersions.getAvailableVersions()),
+        printableXcodeVersions(mutuallyAvailableVersions));
+
+    for (XcodeVersionRuleData version : remoteVersions.getAvailableVersions()) {
+      infoBuilder.addRemoteVersions(
+          XcodeVersionInfo.newBuilder()
+              .setVersion(version.getVersion().toString())
+              .addAllAliases(version.getAliases()));
+    }
+    for (XcodeVersionRuleData version : localVersions.getAvailableVersions()) {
+      infoBuilder.addLocalVersions(
+          XcodeVersionInfo.newBuilder()
+              .setVersion(version.getVersion().toString())
+              .addAllAliases(version.getAliases()));
+    }
+    for (XcodeVersionRuleData version : mutuallyAvailableVersions) {
+      infoBuilder.addMutualVersions(
+          XcodeVersionInfo.newBuilder()
+              .setVersion(version.getVersion().toString())
+              .addAllAliases(version.getAliases()));
+    }
+    infoBuilder.setDefaultVersion(localVersions.getDefaultVersion().getVersion().toString());
+
     if (!Strings.isNullOrEmpty(versionOverrideFlag)) {
       XcodeVersionRuleData specifiedVersionFromRemote =
           remoteAliasesToVersionMap.get(versionOverrideFlag);
       XcodeVersionRuleData specifiedVersionFromLocal =
           localAliasesToVersionMap.get(versionOverrideFlag);
       if (specifiedVersionFromLocal != null && specifiedVersionFromRemote != null) {
-        return Maps.immutableEntry(specifiedVersionFromRemote, XcodeConfigInfo.Availability.BOTH);
+        XcodeVersionRuleData strictlyMatchedRemoteVersion =
+            remoteAliasesToVersionMap.get(specifiedVersionFromLocal.getVersion().toString());
+        if (strictlyMatchedRemoteVersion != null) {
+          return Maps.immutableEntry(specifiedVersionFromRemote, Availability.BOTH);
+        } else {
+          ruleContext.throwWithRuleError(
+              String.format(
+                  "Xcode version %1$s was selected, either because --xcode_version was passed, or"
+                      + " because xcode-select points to this version locally. This corresponds to"
+                      + " local Xcode version %2$s. That build of version %1$s is not"
+                      + " available remotely, but there is a different build of version %1$s,"
+                      + " which has version %3$s and aliases %4$s. You probably meant to use this"
+                      + " version. Please download it to continue using dynamic execution. If you"
+                      + " really did intend to use local version %2$s, please either specify it"
+                      + " fully with --xcode_version=%2$s or disable dynamic (and thus remote)"
+                      + " execution.",
+                  versionOverrideFlag,
+                  specifiedVersionFromLocal.getVersion(),
+                  specifiedVersionFromRemote.getVersion(),
+                  specifiedVersionFromRemote.getAliases()));
+        }
       } else if (specifiedVersionFromLocal != null) {
         String error =
             String.format(
@@ -303,7 +385,7 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
                       printableXcodeVersions(mutuallyAvailableVersions));
         }
         ruleContext.ruleWarning(error);
-        return Maps.immutableEntry(specifiedVersionFromLocal, XcodeConfigInfo.Availability.LOCAL);
+        return Maps.immutableEntry(specifiedVersionFromLocal, Availability.LOCAL);
       } else if (specifiedVersionFromRemote != null) {
         ruleContext.ruleWarning(
             String.format(
@@ -315,7 +397,7 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
                 versionOverrideFlag,
                 printableXcodeVersions(localVersions.getAvailableVersions()),
                 printableXcodeVersions(remoteVersions.getAvailableVersions())));
-        return Maps.immutableEntry(specifiedVersionFromRemote, XcodeConfigInfo.Availability.REMOTE);
+        return Maps.immutableEntry(specifiedVersionFromRemote, Availability.REMOTE);
       } else { // if (specifiedVersionFromRemote == null && specifiedVersionFromLocal == null)
         ruleContext.throwWithRuleError(
             String.format(
@@ -339,10 +421,11 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
       }
       // This should never occur. All input versions should be above 0.0.
       checkState(defaultVersion != null);
-      return Maps.immutableEntry(defaultVersion, XcodeConfigInfo.Availability.BOTH);
+      return Maps.immutableEntry(defaultVersion, Availability.BOTH);
     }
     // Select the local default.
     Availability availability = null;
+    XcodeVersionRuleData localVersion = null;
     if (mutuallyAvailableVersions.isEmpty()) {
       ruleContext.ruleWarning(
           String.format(
@@ -352,18 +435,31 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
                   + " performance.",
               localVersions.getDefaultVersion().getVersion(),
               printableXcodeVersions(remoteVersions.getAvailableVersions())));
+      localVersion = localVersions.getDefaultVersion();
       availability = Availability.LOCAL;
     } else if (remoteAliasesToVersionMap.containsKey(
         localVersions.getDefaultVersion().getVersion().toString())) {
       availability = Availability.BOTH;
+      localVersion =
+          remoteAliasesToVersionMap.get(localVersions.getDefaultVersion().getVersion().toString());
     } else {
-      ruleContext.ruleWarning(
-          "You passed --experimental_prefer_mutual_xcode=false, which prevents Bazel from"
-              + " selecting an Xcode version that optimizes your performance. Please consider"
-              + " using --experimental_prefer_mutual_xcode=true.");
-      availability = Availability.LOCAL;
+      for (String versionNumber : localVersions.getDefaultVersion().getAliases()) {
+        if (remoteAliasesToVersionMap.containsKey(versionNumber)) {
+          availability = Availability.BOTH;
+          localVersion = remoteAliasesToVersionMap.get(versionNumber);
+          break;
+        }
+      }
+      if (localVersion == null) {
+        ruleContext.ruleWarning(
+            "You passed --experimental_prefer_mutual_xcode=false, which prevents Bazel from"
+                + " selecting an Xcode version that optimizes your performance. Please consider"
+                + " using --experimental_prefer_mutual_xcode=true.");
+        availability = Availability.LOCAL;
+        localVersion = localVersions.getDefaultVersion();
+      }
     }
-    return Maps.immutableEntry(localVersions.getDefaultVersion(), availability);
+    return Maps.immutableEntry(localVersion, availability);
   }
 
   private static String printableXcodeVersions(Iterable<XcodeVersionRuleData> xcodeVersions) {
@@ -428,7 +524,6 @@ public class XcodeConfig implements RuleConfiguredTargetFactory {
   public static XcodeConfigInfo getXcodeConfigInfo(RuleContext ruleContext) {
     return ruleContext.getPrerequisite(
         XcodeConfigRule.XCODE_CONFIG_ATTR_NAME,
-        RuleConfiguredTarget.Mode.TARGET,
-        XcodeConfigInfo.PROVIDER);
+        com.google.devtools.build.lib.rules.apple.XcodeConfigInfo.PROVIDER);
   }
 }

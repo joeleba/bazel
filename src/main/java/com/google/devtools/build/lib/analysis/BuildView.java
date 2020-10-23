@@ -31,6 +31,7 @@ import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionGraph;
 import com.google.devtools.build.lib.actions.ActionLookupData;
+import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -66,9 +67,13 @@ import com.google.devtools.build.lib.pkgcache.PackageManager;
 import com.google.devtools.build.lib.pkgcache.PackageManager.PackageManagerStatistics;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
-import com.google.devtools.build.lib.skyframe.AspectValue;
-import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
-import com.google.devtools.build.lib.skyframe.AspectValue.AspectValueKey;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.server.FailureDetails.Analysis;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
+import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns;
+import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns.Code;
+import com.google.devtools.build.lib.skyframe.AspectValueKey;
+import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
 import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.CoverageReportValue;
@@ -90,6 +95,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -286,9 +292,8 @@ public class BuildView {
     }
 
     List<ConfiguredTargetKey> topLevelCtKeys =
-        topLevelTargetsWithConfigs
-            .stream()
-            .map(node -> ConfiguredTargetKey.of(node.getLabel(), node.getConfiguration()))
+        topLevelTargetsWithConfigs.stream()
+            .map(TargetAndConfiguration::getConfiguredTargetKey)
             .collect(Collectors.toList());
 
     Multimap<Pair<Label, String>, BuildConfiguration> aspectConfigurations =
@@ -299,7 +304,7 @@ public class BuildView {
       // Syntax: label%aspect
       int delimiterPosition = aspect.indexOf('%');
       if (delimiterPosition >= 0) {
-        // TODO(jfield): For consistency with Skylark loads, the aspect should be specified
+        // TODO(jfield): For consistency with Starlark loads, the aspect should be specified
         // as an absolute label.
         // We convert it for compatibility reasons (this will be removed in the future).
         String bzlFileLoadLikeString = aspect.substring(0, delimiterPosition);
@@ -322,34 +327,39 @@ public class BuildView {
             bzlFileLoadLikeString = bzlFileLoadLikeString + ".bzl";
           }
         }
-        Label skylarkFileLabel;
+        Label starlarkFileLabel;
         try {
-          skylarkFileLabel =
+          starlarkFileLabel =
               Label.parseAbsolute(
                   bzlFileLoadLikeString, /* repositoryMapping= */ ImmutableMap.of());
         } catch (LabelSyntaxException e) {
+          String errorMessage = String.format("Invalid aspect '%s': %s", aspect, e.getMessage());
           throw new ViewCreationFailedException(
-              String.format("Invalid aspect '%s': %s", aspect, e.getMessage()), e);
+              errorMessage,
+              createFailureDetail(errorMessage, Analysis.Code.ASPECT_LABEL_SYNTAX_ERROR),
+              e);
         }
 
-        String skylarkFunctionName = aspect.substring(delimiterPosition + 1);
+        String starlarkFunctionName = aspect.substring(delimiterPosition + 1);
         for (TargetAndConfiguration targetSpec : topLevelTargetsWithConfigs) {
           if (targetSpec.getConfiguration() != null
               && targetSpec.getConfiguration().trimConfigurationsRetroactively()) {
+            String errorMessage =
+                "Aspects were requested, but are not supported in retroactive trimming mode.";
             throw new ViewCreationFailedException(
-                "Aspects were requested, but are not supported in retroactive trimming mode.");
+                errorMessage, createFailureDetail(errorMessage, Analysis.Code.ASPECT_PREREQ_UNMET));
           }
           aspectConfigurations.put(
               Pair.of(targetSpec.getLabel(), aspect), targetSpec.getConfiguration());
           aspectKeys.add(
-              AspectValue.createSkylarkAspectKey(
+              AspectValueKey.createStarlarkAspectKey(
                   targetSpec.getLabel(),
                   // For invoking top-level aspects, use the top-level configuration for both the
                   // aspect and the base target while the top-level configuration is untrimmed.
                   targetSpec.getConfiguration(),
                   targetSpec.getConfiguration(),
-                  skylarkFileLabel,
-                  skylarkFunctionName));
+                  starlarkFileLabel,
+                  starlarkFunctionName));
         }
       } else {
         final NativeAspectClass aspectFactoryClass =
@@ -359,23 +369,27 @@ public class BuildView {
           for (TargetAndConfiguration targetSpec : topLevelTargetsWithConfigs) {
             if (targetSpec.getConfiguration() != null
                 && targetSpec.getConfiguration().trimConfigurationsRetroactively()) {
+              String errorMessage =
+                  "Aspects were requested, but are not supported in retroactive trimming mode.";
               throw new ViewCreationFailedException(
-                  "Aspects were requested, but are not supported in retroactive trimming mode.");
+                  errorMessage,
+                  createFailureDetail(errorMessage, Analysis.Code.ASPECT_PREREQ_UNMET));
             }
             // For invoking top-level aspects, use the top-level configuration for both the
             // aspect and the base target while the top-level configuration is untrimmed.
             BuildConfiguration configuration = targetSpec.getConfiguration();
             aspectConfigurations.put(Pair.of(targetSpec.getLabel(), aspect), configuration);
             aspectKeys.add(
-                AspectValue.createAspectKey(
+                AspectValueKey.createAspectKey(
                     targetSpec.getLabel(),
                     configuration,
                     new AspectDescriptor(aspectFactoryClass, AspectParameters.EMPTY),
-                    configuration
-                ));
+                    configuration));
           }
         } else {
-          throw new ViewCreationFailedException("Aspect '" + aspect + "' is unknown");
+          String errorMessage = "Aspect '" + aspect + "' is unknown";
+          throw new ViewCreationFailedException(
+              errorMessage, createFailureDetail(errorMessage, Analysis.Code.ASPECT_NOT_FOUND));
         }
       }
     }
@@ -406,9 +420,11 @@ public class BuildView {
               topLevelCtKeys,
               aspectKeys,
               Suppliers.memoize(configurationLookupSupplier),
+              topLevelOptions,
               eventBus,
               keepGoing,
-              loadingPhaseThreads);
+              loadingPhaseThreads,
+              viewOptions.strictConflictChecks);
       setArtifactRoots(skyframeAnalysisResult.getPackageRoots());
     } finally {
       skyframeBuildView.clearInvalidatedConfiguredTargets();
@@ -459,7 +475,7 @@ public class BuildView {
     Set<Label> testsToRun = loadingResult.getTestsToRunLabels();
     Set<ConfiguredTarget> configuredTargets =
         Sets.newLinkedHashSet(skyframeAnalysisResult.getConfiguredTargets());
-    ImmutableSet<AspectValue> aspects = ImmutableSet.copyOf(skyframeAnalysisResult.getAspects());
+    ImmutableMap<AspectKey, ConfiguredAspect> aspects = skyframeAnalysisResult.getAspects();
 
     Set<ConfiguredTarget> allTargetsToTest = null;
     if (testsToRun != null) {
@@ -474,7 +490,6 @@ public class BuildView {
     Collection<Artifact> buildInfoArtifacts =
         skyframeExecutor.getWorkspaceStatusArtifacts(eventHandler);
     Preconditions.checkState(buildInfoArtifacts.size() == 2, buildInfoArtifacts);
-    buildInfoArtifacts.forEach(artifactsToOwnerLabelsBuilder::addArtifact);
 
     // Extra actions
     addExtraActionsIfRequested(
@@ -502,6 +517,20 @@ public class BuildView {
         actionsWrapper.getCoverageOutputs().forEach(artifactsToOwnerLabelsBuilder::addArtifact);
       }
     }
+    // TODO(cparsons): If extra actions are ever removed, this filtering step can probably be
+    //  removed as well: the only concern would be action conflicts involving coverage artifacts,
+    //  which seems far-fetched.
+    if (skyframeAnalysisResult.hasActionConflicts()) {
+      ArtifactsToOwnerLabels tempOwners = artifactsToOwnerLabelsBuilder.build();
+      // We don't remove the (hopefully unnecessary) guard in SkyframeBuildView that enables/
+      // disables analysis, since no new targets should actually be analyzed.
+      Set<Artifact> artifacts = tempOwners.getArtifacts();
+      Predicate<Artifact> errorFreeArtifacts =
+          skyframeExecutor.filterActionConflictsForTopLevelArtifacts(eventHandler, artifacts);
+      artifactsToOwnerLabelsBuilder = tempOwners.toBuilder().filterArtifacts(errorFreeArtifacts);
+    }
+    // Build-info artifacts are always conflict-free, and can't be checked easily.
+    buildInfoArtifacts.forEach(artifactsToOwnerLabelsBuilder::addArtifact);
 
     // Tests.
     Pair<ImmutableSet<ConfiguredTarget>, ImmutableSet<ConfiguredTarget>> testsPair =
@@ -510,8 +539,8 @@ public class BuildView {
     ImmutableSet<ConfiguredTarget> parallelTests = testsPair.first;
     ImmutableSet<ConfiguredTarget> exclusiveTests = testsPair.second;
 
-    String error =
-        createErrorMessage(loadingResult, skyframeAnalysisResult, topLevelTargetsWithConfigs);
+    FailureDetail failureDetail =
+        createFailureDetail(loadingResult, skyframeAnalysisResult, topLevelTargetsWithConfigs);
 
     final WalkableGraph graph = skyframeAnalysisResult.getWalkableGraph();
     final ActionGraph actionGraph =
@@ -545,7 +574,7 @@ public class BuildView {
         aspects,
         allTargetsToTest == null ? null : ImmutableList.copyOf(allTargetsToTest),
         ImmutableSet.copyOf(targetsToSkip),
-        error,
+        failureDetail,
         actionGraph,
         artifactsToOwnerLabelsBuilder.build(),
         parallelTests,
@@ -562,24 +591,47 @@ public class BuildView {
    * interleaved, but sequential on the single target scale).
    */
   @Nullable
-  public static String createErrorMessage(
+  public static FailureDetail createFailureDetail(
       TargetPatternPhaseValue loadingResult,
       @Nullable SkyframeAnalysisResult skyframeAnalysisResult,
       @Nullable TopLevelTargetsAndConfigsResult topLevelTargetsAndConfigs) {
     if (loadingResult.hasError()) {
-      return "command succeeded, but there were errors parsing the target pattern";
+      return FailureDetail.newBuilder()
+          .setMessage("command succeeded, but there were errors parsing the target pattern")
+          .setTargetPatterns(TargetPatterns.newBuilder().setCode(Code.TARGET_PATTERN_PARSE_FAILURE))
+          .build();
     }
     if (loadingResult.hasPostExpansionError()
         || (skyframeAnalysisResult != null && skyframeAnalysisResult.hasLoadingError())) {
-      return "command succeeded, but there were loading phase errors";
+      return FailureDetail.newBuilder()
+          .setMessage("command succeeded, but there were loading phase errors")
+          .setAnalysis(Analysis.newBuilder().setCode(Analysis.Code.GENERIC_LOADING_PHASE_FAILURE))
+          .build();
     }
     if (topLevelTargetsAndConfigs != null && topLevelTargetsAndConfigs.hasError()) {
-      return "command succeeded, but top level configurations could not be created";
+      return FailureDetail.newBuilder()
+          .setMessage("command succeeded, but top level configurations could not be created")
+          .setBuildConfiguration(
+              FailureDetails.BuildConfiguration.newBuilder()
+                  .setCode(
+                      FailureDetails.BuildConfiguration.Code
+                          .TOP_LEVEL_CONFIGURATION_CREATION_FAILURE))
+          .build();
     }
     if (skyframeAnalysisResult != null && skyframeAnalysisResult.hasAnalysisError()) {
-      return "command succeeded, but not all targets were analyzed";
+      return FailureDetail.newBuilder()
+          .setMessage("command succeeded, but not all targets were analyzed")
+          .setAnalysis(Analysis.newBuilder().setCode(Analysis.Code.NOT_ALL_TARGETS_ANALYZED))
+          .build();
     }
     return null;
+  }
+
+  private static FailureDetail createFailureDetail(String errorMessage, Analysis.Code code) {
+    return FailureDetail.newBuilder()
+        .setMessage(errorMessage)
+        .setAnalysis(Analysis.newBuilder().setCode(code))
+        .build();
   }
 
   private static NestedSet<Artifact> getBaselineCoverageArtifacts(
@@ -587,7 +639,7 @@ public class BuildView {
       ArtifactsToOwnerLabels.Builder topLevelArtifactsToOwnerLabels) {
     NestedSetBuilder<Artifact> baselineCoverageArtifacts = NestedSetBuilder.stableOrder();
     for (ConfiguredTarget target : configuredTargets) {
-      InstrumentedFilesInfo provider = target.get(InstrumentedFilesInfo.SKYLARK_CONSTRUCTOR);
+      InstrumentedFilesInfo provider = target.get(InstrumentedFilesInfo.STARLARK_CONSTRUCTOR);
       if (provider != null) {
         TopLevelArtifactHelper.addArtifactsWithOwnerLabel(
             provider.getBaselineCoverageArtifacts(),
@@ -603,7 +655,7 @@ public class BuildView {
   private void addExtraActionsIfRequested(
       AnalysisOptions viewOptions,
       Collection<ConfiguredTarget> configuredTargets,
-      Collection<AspectValue> aspects,
+      ImmutableMap<AspectKey, ConfiguredAspect> aspects,
       ArtifactsToOwnerLabels.Builder artifactsToTopLevelLabelsMap,
       ExtendedEventHandler eventHandler) {
     RegexFilter filter = viewOptions.extraActionFilter;
@@ -645,21 +697,21 @@ public class BuildView {
         }
       }
     }
-    for (AspectValue aspect : aspects) {
+    for (Map.Entry<AspectKey, ConfiguredAspect> aspectEntry : aspects.entrySet()) {
       ExtraActionArtifactsProvider provider =
-          aspect.getConfiguredAspect().getProvider(ExtraActionArtifactsProvider.class);
+          aspectEntry.getValue().getProvider(ExtraActionArtifactsProvider.class);
       if (provider != null) {
         if (viewOptions.extraActionTopLevelOnly) {
           TopLevelArtifactHelper.addArtifactsWithOwnerLabel(
               provider.getExtraActionArtifacts(),
               filter,
-              aspect.getLabel(),
+              aspectEntry.getKey().getLabel(),
               artifactsToTopLevelLabelsMap);
         } else {
           TopLevelArtifactHelper.addArtifactsWithOwnerLabel(
               provider.getTransitiveExtraActionArtifacts(),
               filter,
-              aspect.getLabel(),
+              aspectEntry.getKey().getLabel(),
               artifactsToTopLevelLabelsMap);
         }
       }
@@ -677,7 +729,7 @@ public class BuildView {
     // might have injected.
     for (Artifact.DerivedArtifact artifact :
         provider.getTransitiveExtraActionArtifacts().toList()) {
-      ActionLookupValue.ActionLookupKey owner = artifact.getArtifactOwner();
+      ActionLookupKey owner = artifact.getArtifactOwner();
       if (owner instanceof AspectKey) {
         if (aspectClasses.contains(((AspectKey) owner).getAspectClass())) {
           artifacts.add(artifact);

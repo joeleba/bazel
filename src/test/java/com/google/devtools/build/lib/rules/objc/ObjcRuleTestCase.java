@@ -16,8 +16,6 @@ package com.google.devtools.build.lib.rules.objc;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.getFirstArtifactEndingWith;
-import static com.google.devtools.build.lib.rules.objc.ObjcProvider.HEADER;
-import static com.google.devtools.build.lib.rules.objc.ObjcProvider.INCLUDE;
 import static com.google.devtools.build.lib.rules.objc.ObjcProvider.MODULE_MAP;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.LIPO;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.SRCS_TYPE;
@@ -39,6 +37,7 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
@@ -239,7 +238,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     throw new AssertionError();
   }
 
-  private static List<String> compilationModeCopts(CompilationMode mode) {
+  protected static ImmutableList<String> compilationModeCopts(CompilationMode mode) {
     switch (mode) {
       case DBG:
         return ImmutableList.<String>builder()
@@ -316,7 +315,10 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
       throws InterruptedException, OptionsParsingException, InvalidConfigurationException {
     ImmutableList.Builder<BuildConfiguration> splitConfigs = ImmutableList.builder();
 
-    for (BuildOptions splitOptions : splitTransition.split(configuration.getOptions()).values()) {
+    BuildOptionsView fragmentRestrictedOptions =
+        new BuildOptionsView(configuration.getOptions(), splitTransition.requiresOptionFragments());
+    for (BuildOptions splitOptions :
+        splitTransition.split(fragmentRestrictedOptions, eventCollector).values()) {
       splitConfigs.add(getSkyframeExecutor().getConfigurationForTesting(
           reporter, configuration.fragmentClasses(), splitOptions));
     }
@@ -427,22 +429,22 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
   }
 
   protected ObjcProvider providerForTarget(String label) throws Exception {
-    ObjcProvider objcProvider = getConfiguredTarget(label).get(ObjcProvider.SKYLARK_CONSTRUCTOR);
+    ObjcProvider objcProvider = getConfiguredTarget(label).get(ObjcProvider.STARLARK_CONSTRUCTOR);
     if (objcProvider != null) {
       return objcProvider;
     }
     AppleExecutableBinaryInfo executableProvider =
-        getConfiguredTarget(label).get(AppleExecutableBinaryInfo.SKYLARK_CONSTRUCTOR);
+        getConfiguredTarget(label).get(AppleExecutableBinaryInfo.STARLARK_CONSTRUCTOR);
     if (executableProvider != null) {
       return executableProvider.getDepsObjcProvider();
     }
     AppleDylibBinaryInfo dylibProvider =
-        getConfiguredTarget(label).get(AppleDylibBinaryInfo.SKYLARK_CONSTRUCTOR);
+        getConfiguredTarget(label).get(AppleDylibBinaryInfo.STARLARK_CONSTRUCTOR);
     if (dylibProvider != null) {
       return dylibProvider.getDepsObjcProvider();
     }
     AppleLoadableBundleBinaryInfo loadableBundleProvider =
-        getConfiguredTarget(label).get(AppleLoadableBundleBinaryInfo.SKYLARK_CONSTRUCTOR);
+        getConfiguredTarget(label).get(AppleLoadableBundleBinaryInfo.STARLARK_CONSTRUCTOR);
     if (loadableBundleProvider != null) {
       return loadableBundleProvider.getDepsObjcProvider();
     }
@@ -468,15 +470,19 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     assertHasRequirement(action, ExecutionRequirements.REQUIRES_DARWIN);
   }
 
-  protected ConfiguredTarget addBinWithTransitiveDepOnFrameworkImport() throws Exception {
-    ConfiguredTarget lib = addLibWithDepOnFrameworkImport();
+  protected ConfiguredTarget addBinWithTransitiveDepOnFrameworkImport(boolean compileInfoMigration)
+      throws Exception {
+    ConfiguredTarget lib =
+        compileInfoMigration
+            ? addLibWithDepOnFrameworkImportPostMigration()
+            : addLibWithDepOnFrameworkImportPreMigration();
     return createBinaryTargetWriter("//bin:bin")
         .setList("deps", lib.getLabel().toString())
         .write();
 
   }
 
-  private ConfiguredTarget addLibWithDepOnFrameworkImport() throws Exception {
+  private ConfiguredTarget addLibWithDepOnFrameworkImportPreMigration() throws Exception {
     scratch.file(
         "fx/defs.bzl",
         "def _custom_static_framework_import_impl(ctx):",
@@ -492,6 +498,35 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
         "custom_static_framework_import(",
         "    name = 'fx',",
         "    framework_search_paths = ['fx/fx1.framework', 'fx/fx2.framework'],",
+        ")");
+    return createLibraryTargetWriter("//lib:lib")
+        .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
+        .setList("deps", "//fx:fx")
+        .write();
+  }
+
+  private ConfiguredTarget addLibWithDepOnFrameworkImportPostMigration() throws Exception {
+    scratch.file(
+        "fx/defs.bzl",
+        "def _custom_static_framework_import_impl(ctx):",
+        "    return [",
+        "        apple_common.new_objc_provider(),",
+        "        CcInfo(",
+        "            compilation_context=cc_common.create_compilation_context(",
+        "                framework_includes=depset(ctx.attr.framework_search_paths)",
+        "            ),",
+        "        )",
+        "    ]",
+        "custom_static_framework_import = rule(",
+        "    _custom_static_framework_import_impl,",
+        "    attrs={'framework_search_paths': attr.string_list()},",
+        ")");
+    scratch.file(
+        "fx/BUILD",
+        "load(':defs.bzl', 'custom_static_framework_import')",
+        "custom_static_framework_import(",
+        "    name = 'fx',",
+        "    framework_search_paths = ['fx'],",
         ")");
     return createLibraryTargetWriter("//lib:lib")
         .setAndCreateFiles("srcs", "a.m", "b.m", "private.h")
@@ -527,19 +562,25 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     assertContainsSublist(compileAction("//x:x", "b.o").getArguments(), includeFlags);
   }
 
-  protected void checkProvidesHdrsAndIncludes(RuleType ruleType) throws Exception {
+  protected void checkProvidesHdrsAndIncludes(RuleType ruleType, Optional<String> privateHdr)
+      throws Exception {
     scratch.file("x/a.h");
-    ruleType.scratchTarget(scratch,
-        "hdrs", "['a.h']",
-        "includes", "['incdir']");
+    ruleType.scratchTarget(scratch, "hdrs", "['a.h']", "includes", "['incdir']");
     ObjcProvider provider =
         getConfiguredTarget("//x:x", getAppleCrosstoolConfiguration())
-            .get(ObjcProvider.SKYLARK_CONSTRUCTOR);
-    assertThat(provider.get(HEADER).toList()).containsExactly(getSourceArtifact("x/a.h"));
-    assertThat(provider.get(INCLUDE).toList())
+            .get(ObjcProvider.STARLARK_CONSTRUCTOR);
+    if (privateHdr.isPresent()) {
+      assertThat(provider.header().toList())
+          .containsExactly(getSourceArtifact("x/a.h"), getSourceArtifact(privateHdr.get()));
+    } else {
+      assertThat(provider.header().toList()).containsExactly(getSourceArtifact("x/a.h"));
+    }
+    assertThat(provider.include())
         .containsExactly(
             PathFragment.create("x/incdir"),
-            getAppleCrosstoolConfiguration().getGenfilesFragment().getRelative("x/incdir"));
+            getAppleCrosstoolConfiguration()
+                .getGenfilesFragment(RepositoryName.MAIN)
+                .getRelative("x/incdir"));
   }
 
   protected void checkCompilesWithHdrs(RuleType ruleType) throws Exception {
@@ -657,7 +698,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
         view.getPrerequisiteConfiguredTargetForTesting(
             reporter, topTarget, Label.parseAbsoluteUnchecked("//libs:objc_lib"), masterConfig);
 
-    ObjcProtoProvider protoProvider = libTarget.get(ObjcProtoProvider.SKYLARK_CONSTRUCTOR);
+    ObjcProtoProvider protoProvider = libTarget.get(ObjcProtoProvider.STARLARK_CONSTRUCTOR);
     assertThat(protoProvider).isNotNull();
     assertThat(
             Artifact.asExecPaths(
@@ -797,7 +838,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
         view.getPrerequisiteConfiguredTargetForTesting(
             reporter, topTarget, Label.parseAbsoluteUnchecked("//libs:objc_lib"), masterConfig);
 
-    ObjcProtoProvider protoProvider = libTarget.get(ObjcProtoProvider.SKYLARK_CONSTRUCTOR);
+    ObjcProtoProvider protoProvider = libTarget.get(ObjcProtoProvider.STARLARK_CONSTRUCTOR);
     assertThat(protoProvider).isNotNull();
   }
 
@@ -915,8 +956,13 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
       BuildConfiguration configuration, String... unrootedPaths) {
     ImmutableList.Builder<String> rootedPaths = new ImmutableList.Builder<>();
     for (String unrootedPath : unrootedPaths) {
-      rootedPaths.add(unrootedPath)
-          .add(configuration.getGenfilesFragment().getRelative(unrootedPath).getSafePathString());
+      rootedPaths
+          .add(unrootedPath)
+          .add(
+              configuration
+                  .getGenfilesFragment(RepositoryName.MAIN)
+                  .getRelative(unrootedPath)
+                  .getSafePathString());
     }
     return rootedPaths.build();
   }
@@ -987,6 +1033,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     assertThat(compileActionA.getArguments())
         .containsAtLeastElementsIn(allExpectedCoptsBuilder.build())
         .inOrder();
+    assertThat(compileActionA.getArguments()).doesNotContain("-D_GLIBCXX_DEBUG");
   }
 
   private void addTransitiveDefinesUsage(RuleType topLevelRuleType) throws Exception {
@@ -1114,7 +1161,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
 
   /** Returns the directory where objc modules will be cached. */
   protected String getModulesCachePath() throws InterruptedException {
-    return getAppleCrosstoolConfiguration().getGenfilesFragment()
+    return getAppleCrosstoolConfiguration().getGenfilesFragment(RepositoryName.MAIN)
         + "/"
         + CompilationSupport.OBJC_MODULE_CACHE_DIR_NAME;
   }
@@ -1617,7 +1664,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     assertThat(archiveAction).isInstanceOf(CppLinkAction.class);
   }
 
-  protected void scratchFrameworkSkylarkStub(String bzlPath) throws Exception {
+  protected void scratchFrameworkStarlarkStub(String bzlPath) throws Exception {
     PathFragment pathFragment = PathFragment.create(bzlPath);
     scratch.file(pathFragment.getParentDirectory() + "/BUILD");
     scratch.file(
@@ -1659,7 +1706,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     ruleType.scratchTarget(scratch,
         "deps", "['//package:objcLib']",
         "dylibs", "['//package:avoidLib']");
-    scratchFrameworkSkylarkStub("frameworkstub/framework_stub.bzl");
+    scratchFrameworkStarlarkStub("frameworkstub/framework_stub.bzl");
     scratch.file(
         "package/BUILD",
         "load('//frameworkstub:framework_stub.bzl', 'framework_stub_rule')",
@@ -1710,7 +1757,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     ruleType.scratchTarget(scratch,
         "deps", "['//package:ObjcLib']",
         "dylibs", "['//package:dylib1']");
-    scratchFrameworkSkylarkStub("frameworkstub/framework_stub.bzl");
+    scratchFrameworkStarlarkStub("frameworkstub/framework_stub.bzl");
     scratch.file("package/BUILD",
         "load('//frameworkstub:framework_stub.bzl', 'framework_stub_rule')",
         "objc_library(name = 'ObjcLib', srcs = [ 'ObjcLib.m' ],",
@@ -1741,7 +1788,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     assertThat(getFirstArtifactEndingWith(linkAction.getInputs(),
         "package/libDylib2Lib.a")).isNull();
 
-    // Sanity check that the identical binary without dylibs would be fully linked.
+    // Check that the identical binary without dylibs would be fully linked.
     Action alternateLipobinAction = lipoBinAction("//package:alternate");
     Artifact alternateBinArtifact = getFirstArtifactEndingWith(alternateLipobinAction.getInputs(),
         "package/alternate_bin");
@@ -1764,7 +1811,7 @@ public abstract class ObjcRuleTestCase extends BuildViewTestCase {
     ruleType.scratchTarget(scratch,
         "deps", "['//package:objcLib']",
         "dylibs", "['//package:avoidLib']");
-    scratchFrameworkSkylarkStub("frameworkstub/framework_stub.bzl");
+    scratchFrameworkStarlarkStub("frameworkstub/framework_stub.bzl");
     scratch.file("package/BUILD",
         "load('//frameworkstub:framework_stub.bzl', 'framework_stub_rule')",
         "framework_stub_rule(name = 'avoidLib', binary = ':avoidLibBinary')",

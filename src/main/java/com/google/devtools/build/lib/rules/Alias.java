@@ -29,7 +29,6 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.VisibilityProvider;
 import com.google.devtools.build.lib.analysis.VisibilityProviderImpl;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
@@ -44,7 +43,7 @@ public class Alias implements RuleConfiguredTargetFactory {
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
-    ConfiguredTarget actual = (ConfiguredTarget) ruleContext.getPrerequisite("actual", Mode.TARGET);
+    ConfiguredTarget actual = (ConfiguredTarget) ruleContext.getPrerequisite("actual");
 
     // TODO(b/129045294): Remove once the flag is flipped.
     if (ruleContext.getLabel().getCanonicalForm().startsWith("@bazel_tools//platforms")
@@ -108,7 +107,7 @@ public class Alias implements RuleConfiguredTargetFactory {
   }
 }
 
-/*<!-- #BLAZE_RULE (NAME = alias, TYPE = OTHER, FAMILY = General)[GENERIC_RULE] -->
+/*<!-- #BLAZE_RULE (NAME = alias, FAMILY = General)[GENERIC_RULE] -->
 
 <p>
   The <code>alias</code> rule creates another name a rule can be referred to as.

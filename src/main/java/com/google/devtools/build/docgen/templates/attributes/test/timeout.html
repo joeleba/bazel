@@ -1,5 +1,5 @@
 <p><code>String "short", "moderate", "long", "eternal"
-(with the default derived from the test's size attribute)</code></p>
+(with the default derived from the test's size attribute); <a href="#configurable-attributes">nonconfigurable</a></code></p>
 
 <p>
 How long the test is expected to run before returning.
@@ -44,4 +44,8 @@ conditions which are known to be slow. The <code>--test_timeout</code> values
 are in seconds. For example <code>--test_timeout=120</code> will set the test
 timeout to two minutes.
 </p>
+
+<p>The environment variable
+<a href="../test-encyclopedia.html#initial-conditions"><code>TEST_TIMEOUT</code></a>
+will be set to the test timeout (in seconds) when spawning the test.</p>
 

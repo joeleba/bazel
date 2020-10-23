@@ -40,29 +40,44 @@ public class J2ObjcSourceTest {
   public final void setRootDir() throws Exception  {
     Scratch scratch = new Scratch();
     Path execRoot = scratch.getFileSystem().getPath("/exec");
-    rootDir = ArtifactRoot.asDerivedRoot(execRoot, scratch.dir("/exec/root"));
+    String outSegment = "root";
+    execRoot.getChild(outSegment).createDirectoryAndParents();
+    rootDir = ArtifactRoot.asDerivedRoot(execRoot, outSegment);
   }
 
   @Test
   public void testEqualsAndHashCode() throws Exception {
     new EqualsTester()
         .addEqualityGroup(
-            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA),
-            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA))
+            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA, false),
+            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA, false))
         .addEqualityGroup(
-            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA),
-            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA))
+            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA, false),
+            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA, false))
         .addEqualityGroup(
-            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA),
-            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA))
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA, false),
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA, false))
         .addEqualityGroup(
-            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO),
-            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO))
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO, false),
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO, false))
+        .addEqualityGroup(
+            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA, true),
+            getJ2ObjcSource("//a/b:c", "sourceA", J2ObjcSource.SourceType.JAVA, true))
+        .addEqualityGroup(
+            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA, true),
+            getJ2ObjcSource("//a/b:d", "sourceA", J2ObjcSource.SourceType.JAVA, true))
+        .addEqualityGroup(
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA, true),
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.JAVA, true))
+        .addEqualityGroup(
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO, true),
+            getJ2ObjcSource("//a/b:d", "sourceC", J2ObjcSource.SourceType.PROTO, true))
         .testEquals();
   }
 
-  private J2ObjcSource getJ2ObjcSource(String label, String fileName,
-      J2ObjcSource.SourceType sourceType) throws Exception {
+  private J2ObjcSource getJ2ObjcSource(
+      String label, String fileName, J2ObjcSource.SourceType sourceType, boolean compileWithARC)
+      throws Exception {
     Label ruleLabel = Label.parseAbsolute(label, ImmutableMap.of());
     PathFragment path = ruleLabel.toPathFragment();
     return new J2ObjcSource(
@@ -71,7 +86,8 @@ public class J2ObjcSourceTest {
         ImmutableList.of(getArtifactForTest(path.getRelative(fileName + ".h").toString())),
         path,
         sourceType,
-        ImmutableList.of(path));
+        ImmutableList.of(path),
+        compileWithARC);
   }
 
   private Artifact getArtifactForTest(String path) throws Exception {

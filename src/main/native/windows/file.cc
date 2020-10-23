@@ -29,6 +29,10 @@
 
 #include "src/main/native/windows/util.h"
 
+#ifndef IO_REPARSE_TAG_PROJFS
+#define IO_REPARSE_TAG_PROJFS 0x9000001C
+#endif
+
 namespace bazel {
 namespace windows {
 
@@ -413,6 +417,46 @@ int CreateJunction(const wstring& junction_name, const wstring& junction_target,
   return CreateJunctionResult::kSuccess;
 }
 
+int CreateSymlink(const wstring& symlink_name, const wstring& symlink_target,
+                   wstring* error) {
+  if (!IsAbsoluteNormalizedWindowsPath(symlink_name)) {
+    if (error) {
+      *error = MakeErrorMessage(
+          WSTR(__FILE__), __LINE__, L"CreateSymlink", symlink_name,
+          L"expected an absolute Windows path for symlink_name");
+    }
+    return CreateSymlinkResult::kError;
+  }
+  if (!IsAbsoluteNormalizedWindowsPath(symlink_target)) {
+    if (error) {
+      *error = MakeErrorMessage(
+          WSTR(__FILE__), __LINE__, L"CreateSymlink", symlink_target,
+          L"expected an absolute Windows path for symlink_target");
+    }
+    return CreateSymlinkResult::kError;
+  }
+
+  const wstring name = AddUncPrefixMaybe(symlink_name);
+  const wstring target = AddUncPrefixMaybe(symlink_target);
+
+  DWORD attrs = GetFileAttributesW(target.c_str());
+  if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+    // Instead of creating a symlink to a directory use a Junction.
+    return CreateSymlinkResult::kTargetIsDirectory;
+  }
+
+  if (!CreateSymbolicLinkW(name.c_str(), target.c_str(),
+                           SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+     // The flag SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE requires
+     // developer mode enabled, which we expect if using symbolic linking.
+     *error = MakeErrorMessage(
+               WSTR(__FILE__), __LINE__, L"CreateSymlink", symlink_target,
+               L"createSymbolicLinkW failed");
+     return CreateSymlinkResult::kError;
+  }
+  return CreateSymlinkResult::kSuccess;
+}
+
 int ReadSymlinkOrJunction(const wstring& path, wstring* result,
                           wstring* error) {
   if (!IsAbsoluteNormalizedWindowsPath(path)) {
@@ -483,6 +527,10 @@ int ReadSymlinkOrJunction(const wstring& path, wstring* result,
       *result = wstring(
           p, buf->MountPointReparseBuffer.SubstituteNameLength / sizeof(WCHAR));
       return ReadSymlinkOrJunctionResult::kSuccess;
+    }
+    case IO_REPARSE_TAG_PROJFS: {
+      // Virtual File System for Git
+      return ReadSymlinkOrJunctionResult::kNotALink;
     }
     default:
       return ReadSymlinkOrJunctionResult::kUnknownLinkType;
@@ -589,6 +637,15 @@ int DeletePath(const wstring& path, wstring* error) {
                                   GetLastError(), error);
   }
 
+  if (attr & FILE_ATTRIBUTE_READONLY) {
+    // Remove the read-only attribute.
+    attr &= ~FILE_ATTRIBUTE_READONLY;
+    if (!SetFileAttributesW(wpath, attr)) {
+      return GetResultFromErrorCode(L"SetFileAttributesW", path, GetLastError(),
+                                    error);
+    }
+  }
+
   if (attr & FILE_ATTRIBUTE_DIRECTORY) {
     // It's a directory or a junction, RemoveDirectoryW should be used.
     //
@@ -660,14 +717,6 @@ int DeletePath(const wstring& path, wstring* error) {
     }
   } else {
     // It's a regular file or symlink, DeleteFileW should be used.
-    if (attr & FILE_ATTRIBUTE_READONLY) {
-      // Remove the read-only attribute.
-      attr &= ~FILE_ATTRIBUTE_READONLY;
-      if (!SetFileAttributesW(wpath, attr)) {
-        return GetResultFromErrorCode(L"SetFileAttributesW", path,
-                                      GetLastError(), error);
-      }
-    }
     if (!DeleteFileW(wpath)) {
       // Failed to delete the file or symlink.
       return GetResultFromErrorCode(L"DeleteFileW", path,

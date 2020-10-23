@@ -23,7 +23,6 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.Type;
@@ -76,12 +75,11 @@ public abstract class CcImport implements RuleConfiguredTargetFactory {
     CcToolchainProvider ccToolchain =
         CppHelper.getToolchainUsingDefaultCcToolchainAttribute(ruleContext);
     FeatureConfiguration featureConfiguration =
-        CcCommon.configureFeaturesOrReportRuleError(ruleContext, ccToolchain);
+        CcCommon.configureFeaturesOrReportRuleError(ruleContext, ccToolchain, semantics);
 
-    Artifact staticLibrary = ruleContext.getPrerequisiteArtifact("static_library", Mode.TARGET);
-    Artifact sharedLibrary = ruleContext.getPrerequisiteArtifact("shared_library", Mode.TARGET);
-    Artifact interfaceLibrary =
-        ruleContext.getPrerequisiteArtifact("interface_library", Mode.TARGET);
+    Artifact staticLibrary = ruleContext.getPrerequisiteArtifact("static_library");
+    Artifact sharedLibrary = ruleContext.getPrerequisiteArtifact("shared_library");
+    Artifact interfaceLibrary = ruleContext.getPrerequisiteArtifact("interface_library");
     performErrorChecks(ruleContext, systemProvided, sharedLibrary, interfaceLibrary);
 
     Artifact resolvedSymlinkDynamicLibrary = null;
@@ -163,12 +161,13 @@ public abstract class CcImport implements RuleConfiguredTargetFactory {
                 ccToolchain,
                 ccToolchain.getFdoContext(),
                 TargetUtils.getExecutionInfo(
-                    ruleContext.getRule(), ruleContext.isAllowTagsPropagation()))
+                    ruleContext.getRule(), ruleContext.isAllowTagsPropagation()),
+                /* shouldProcessHeaders= */ true)
             .addPublicHeaders(common.getHeaders())
             .setHeadersCheckingMode(HeadersCheckingMode.STRICT)
             .setCodeCoverageEnabled(CcCompilationHelper.isCodeCoverageEnabled(ruleContext))
             .setPurpose(common.getPurpose(semantics))
-            .compile();
+            .compile(ruleContext);
 
     Map<String, NestedSet<Artifact>> outputGroups =
         CcCompilationHelper.buildOutputGroups(compilationInfo.getCcCompilationOutputs());
@@ -184,7 +183,7 @@ public abstract class CcImport implements RuleConfiguredTargetFactory {
             .addOutputGroups(outputGroups)
             .addProvider(RunfilesProvider.class, RunfilesProvider.simple(Runfiles.EMPTY));
 
-    CcSkylarkApiProvider.maybeAdd(ruleContext, result);
+    CcStarlarkApiProvider.maybeAdd(ruleContext, result);
     return result.build();
   }
 

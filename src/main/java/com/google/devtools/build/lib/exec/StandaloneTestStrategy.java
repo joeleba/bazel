@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.exec;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -31,19 +32,21 @@ import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnContinuation;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.SpawnStrategy;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.test.TestConfiguration;
+import com.google.devtools.build.lib.analysis.test.TestAttempt;
 import com.google.devtools.build.lib.analysis.test.TestResult;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction;
 import com.google.devtools.build.lib.analysis.test.TestRunnerAction.ResolvedPaths;
+import com.google.devtools.build.lib.analysis.test.TestStrategy;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.TestResult.ExecutionInfo;
 import com.google.devtools.build.lib.buildeventstream.TestFileNameConstants;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.server.FailureDetails.Execution.Code;
+import com.google.devtools.build.lib.server.FailureDetails.TestAction;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -92,7 +95,9 @@ public class StandaloneTestStrategy extends TestStrategy {
   public TestRunnerSpawn createTestRunnerSpawn(
       TestRunnerAction action, ActionExecutionContext actionExecutionContext) throws ExecException {
     if (action.getExecutionSettings().getInputManifest() == null) {
-      throw new TestExecException("cannot run local tests with --nobuild_runfile_manifests");
+      throw new TestExecException(
+          "cannot run local tests with --nobuild_runfile_manifests",
+          TestAction.Code.LOCAL_TEST_PREREQ_UNMET);
     }
     Path execRoot = actionExecutionContext.getExecRoot();
     ArtifactPathResolver pathResolver = actionExecutionContext.getPathResolver();
@@ -111,7 +116,7 @@ public class StandaloneTestStrategy extends TestStrategy {
       executionInfo.put(ExecutionRequirements.NO_CACHE, "");
     }
     executionInfo.put(ExecutionRequirements.TIMEOUT, "" + getTimeout(action).getSeconds());
-    if (action.getConfiguration().getFragment(TestConfiguration.class).isPersistentTestRunner()) {
+    if (action.getTestProperties().isPersistentTestRunner()) {
       executionInfo.put(ExecutionRequirements.SUPPORTS_WORKERS, "1");
     }
 
@@ -130,7 +135,7 @@ public class StandaloneTestStrategy extends TestStrategy {
             action.getRunfilesSupplier(),
             ImmutableMap.of(),
             /*inputs=*/ action.getInputs(),
-            action.getConfiguration().getFragment(TestConfiguration.class).isPersistentTestRunner()
+            action.getTestProperties().isPersistentTestRunner()
                 ? action.getTools()
                 : NestedSetBuilder.emptySet(Order.STABLE_ORDER),
             ImmutableSet.copyOf(action.getSpawnOutputs()),
@@ -243,11 +248,17 @@ public class StandaloneTestStrategy extends TestStrategy {
     Path renamedTestLog = null;
     for (Pair<String, Path> pair : testOutputs) {
       if (TestFileNameConstants.TEST_LOG.equals(pair.getFirst())) {
+        Preconditions.checkState(renamedTestLog == null, "multiple test_log matches");
         renamedTestLog = pair.getSecond();
       }
     }
 
     TestResultData.Builder dataBuilder = result.testResultDataBuilder();
+    // If the test log path does not exist, mark the test as incomplete
+    if (renamedTestLog == null) {
+      dataBuilder.setStatus(BlazeTestStatus.INCOMPLETE);
+    }
+
     if (dataBuilder.getStatus() == BlazeTestStatus.PASSED) {
       dataBuilder.setPassedLog(renamedTestLog.toString());
     } else if (dataBuilder.getStatus() == BlazeTestStatus.INCOMPLETE) {
@@ -296,16 +307,24 @@ public class StandaloneTestStrategy extends TestStrategy {
     Path err = resolvedPaths.getTestStderr();
     FileOutErr testOutErr = new FileOutErr(out, err);
     Closeable streamed = null;
-    if (executionOptions.testOutput.equals(TestOutputFormat.STREAMED)) {
+    if (executionOptions.testOutput.equals(ExecutionOptions.TestOutputFormat.STREAMED)) {
       streamed =
-          new StreamedTestOutput(
+          createStreamedTestOutput(
               Reporter.outErrForReporter(actionExecutionContext.getEventHandler()), out);
     }
     long startTimeMillis = actionExecutionContext.getClock().currentTimeMillis();
-    SpawnContinuation spawnContinuation =
-        actionExecutionContext
-            .getContext(SpawnStrategy.class)
-            .beginExecution(spawn, actionExecutionContext.withFileOutErr(testOutErr));
+    SpawnStrategyResolver resolver = actionExecutionContext.getContext(SpawnStrategyResolver.class);
+    SpawnContinuation spawnContinuation;
+    try {
+      spawnContinuation =
+          resolver.beginExecution(spawn, actionExecutionContext.withFileOutErr(testOutErr));
+    } catch (InterruptedException e) {
+      if (streamed != null) {
+        streamed.close();
+      }
+      testOutErr.close();
+      throw e;
+    }
     return new BazelTestAttemptContinuation(
         testAction,
         actionExecutionContext,
@@ -400,11 +419,16 @@ public class StandaloneTestStrategy extends TestStrategy {
     return new TestResult(action, data, /*cached*/ true, execRoot);
   }
 
-  private static final class StandaloneFailedAttemptResult implements FailedAttemptResult {
+  @VisibleForTesting
+  static final class StandaloneFailedAttemptResult implements FailedAttemptResult {
     private final TestResultData testResultData;
 
     StandaloneFailedAttemptResult(TestResultData testResultData) {
       this.testResultData = testResultData;
+    }
+
+    TestResultData testResultData() {
+      return testResultData;
     }
   }
 
@@ -558,6 +582,10 @@ public class StandaloneTestStrategy extends TestStrategy {
         builder
             .setTestPassed(false)
             .setStatus(e.hasTimedOut() ? BlazeTestStatus.TIMEOUT : BlazeTestStatus.FAILED);
+      } catch (InterruptedException e) {
+        closeSuppressed(e, streamed);
+        closeSuppressed(e, fileOutErr);
+        throw e;
       }
       long endTimeMillis = actionExecutionContext.getClock().currentTimeMillis();
 
@@ -573,7 +601,7 @@ public class StandaloneTestStrategy extends TestStrategy {
           streamed.close();
         }
       } catch (IOException e) {
-        throw new EnvironmentalExecException(e);
+        throw new EnvironmentalExecException(e, Code.TEST_OUT_ERR_IO_EXCEPTION);
       }
 
       // SpawnActionContext guarantees the first entry to correspond to the spawn passed in (there
@@ -603,13 +631,14 @@ public class StandaloneTestStrategy extends TestStrategy {
           && fileOutErr.getOutputPath().exists()
           && !xmlOutputPath.exists()) {
         Spawn xmlGeneratingSpawn = createXmlGeneratingSpawn(testAction, primaryResult);
-        SpawnStrategy strategy = actionExecutionContext.getContext(SpawnStrategy.class);
+        SpawnStrategyResolver spawnStrategyResolver =
+            actionExecutionContext.getContext(SpawnStrategyResolver.class);
         // We treat all failures to generate the test.xml here as catastrophic, and won't rerun
         // the test if this fails. We redirect the output to a temporary file.
         FileOutErr xmlSpawnOutErr = actionExecutionContext.getFileOutErr().childOutErr();
         try {
           SpawnContinuation xmlContinuation =
-              strategy.beginExecution(
+              spawnStrategyResolver.beginExecution(
                   xmlGeneratingSpawn, actionExecutionContext.withFileOutErr(xmlSpawnOutErr));
           return new BazelXmlCreationContinuation(
               resolvedPaths, xmlSpawnOutErr, builder, spawnResults, xmlContinuation);

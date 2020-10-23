@@ -29,7 +29,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
-import com.google.devtools.build.lib.analysis.config.HostTransition;
+import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses.CcToolchainRequiringRule;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
@@ -39,7 +39,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.RuleClass.PackageNameConstraint;
-import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.TriState;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.cpp.CcBinary.CcLauncherInfo;
@@ -72,14 +72,14 @@ public class BazelJavaRuleClasses {
           JavaSemantics.JAVA_LIBRARY_CLASS_JAR,
           JavaSemantics.JAVA_LIBRARY_SOURCE_JAR);
 
-  public static final ImmutableList<SkylarkProviderIdentifier> CONTAINS_CC_LINK_PARAMS =
-      ImmutableList.of(SkylarkProviderIdentifier.forKey(CcInfo.PROVIDER.getKey()));
+  public static final ImmutableList<StarlarkProviderIdentifier> CONTAINS_CC_LINK_PARAMS =
+      ImmutableList.of(StarlarkProviderIdentifier.forKey(CcInfo.PROVIDER.getKey()));
 
   /**
    * Meant to be the value of {@code mandatoryProvidersLists} in order for the rule to provide only
    * a {@link JavaInfo} through an attribute.
    */
-  public static final ImmutableList<ImmutableList<SkylarkProviderIdentifier>>
+  public static final ImmutableList<ImmutableList<StarlarkProviderIdentifier>>
       MANDATORY_JAVA_PROVIDER_ONLY = ImmutableList.of(CONTAINS_JAVA_PROVIDER);
 
   /**
@@ -106,7 +106,7 @@ public class BazelJavaRuleClasses {
           "cc_binary", // NB: linkshared=1
           "cc_library",
           "genrule",
-          "genproto", // TODO(bazel-team): we should filter using providers instead (skylark rule).
+          "genproto", // TODO(bazel-team): we should filter using providers instead (starlark rule).
           "java_import",
           "java_library",
           "java_proto_library",
@@ -238,12 +238,12 @@ public class BazelJavaRuleClasses {
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(
               attr("plugins", LABEL_LIST)
-                  .cfg(HostTransition.createFactory())
+                  .cfg(ExecutionTransitionFactory.create())
                   .allowedRuleClasses("java_plugin")
                   .legacyAllowAnyFileType())
           .add(
               attr(":java_plugins", LABEL_LIST)
-                  .cfg(HostTransition.createFactory())
+                  .cfg(ExecutionTransitionFactory.create())
                   .allowedRuleClasses("java_plugin")
                   .silentRuleClassFilter()
                   .value(JavaSemantics.JAVA_PLUGINS))
@@ -419,11 +419,11 @@ public class BazelJavaRuleClasses {
               attr("launcher", LABEL)
                   .allowedFileTypes(FileTypeSet.NO_FILE)
                   .mandatoryProviders(
-                      SkylarkProviderIdentifier.forKey(CcLauncherInfo.PROVIDER.getKey())))
+                      StarlarkProviderIdentifier.forKey(CcLauncherInfo.PROVIDER.getKey())))
           .add(attr(":java_launcher", LABEL).value(JavaSemantics.JAVA_LAUNCHER)) // blaze flag
           .add(
               attr("$launcher", LABEL)
-                  .cfg(HostTransition.createFactory())
+                  .cfg(ExecutionTransitionFactory.create())
                   .value(env.getToolsLabel("//tools/launcher:launcher")))
           .build();
     }

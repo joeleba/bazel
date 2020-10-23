@@ -14,37 +14,35 @@
 
 package com.google.devtools.build.lib.analysis;
 
-import static com.google.devtools.build.lib.syntax.EvalUtils.SKYLARK_COMPARATOR;
-
 import com.google.common.collect.ImmutableCollection;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.configuredtargets.MergedConfiguredTarget.DuplicateException;
-import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleConfiguredTargetUtil;
+import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleConfiguredTargetUtil;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkbuildapi.OutputGroupInfoApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.SkylarkIndexable;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkIterable;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
+import com.google.devtools.build.lib.starlarkbuildapi.OutputGroupInfoApi;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkIndexable;
+import net.starlark.java.eval.StarlarkIterable;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.syntax.Location;
 
 /**
  * {@code ConfiguredTarget}s implementing this interface can provide artifacts that <b>can</b> be
@@ -62,10 +60,10 @@ import javax.annotation.Nullable;
 @Immutable
 @AutoCodec
 public final class OutputGroupInfo extends StructImpl
-    implements SkylarkIndexable, StarlarkIterable<String>, OutputGroupInfoApi {
-  public static final String SKYLARK_NAME = "output_groups";
+    implements StarlarkIndexable, StarlarkIterable<String>, OutputGroupInfoApi {
+  public static final String STARLARK_NAME = "output_groups";
 
-  public static final OutputGroupInfoProvider SKYLARK_CONSTRUCTOR = new OutputGroupInfoProvider();
+  public static final OutputGroupInfoProvider STARLARK_CONSTRUCTOR = new OutputGroupInfoProvider();
 
   /**
    * Prefix for output groups that are not reported to the user on the terminal output of Blaze when
@@ -139,20 +137,19 @@ public final class OutputGroupInfo extends StructImpl
   private final ImmutableMap<String, NestedSet<Artifact>> outputGroups;
 
   public OutputGroupInfo(ImmutableMap<String, NestedSet<Artifact>> outputGroups) {
-    super(SKYLARK_CONSTRUCTOR, Location.BUILTIN);
+    super(STARLARK_CONSTRUCTOR, Location.BUILTIN);
     this.outputGroups = outputGroups;
   }
 
-  @Nullable
-  public static OutputGroupInfo get(TransitiveInfoCollection collection) {
-    return collection.get(OutputGroupInfo.SKYLARK_CONSTRUCTOR);
+  @Override
+  public boolean isImmutable() {
+    return true; // immutable and Starlark-hashable
   }
 
   @Nullable
-  public static OutputGroupInfo get(ConfiguredAspect aspect) {
-    return (OutputGroupInfo) aspect.get(SKYLARK_CONSTRUCTOR.getKey());
+  public static OutputGroupInfo get(ProviderCollection collection) {
+    return collection.get(STARLARK_CONSTRUCTOR);
   }
-
 
   /** Return the artifacts in a particular output group.
    *
@@ -262,7 +259,7 @@ public final class OutputGroupInfo extends StructImpl
 
   @Override
   public Iterator<String> iterator() {
-    return SKYLARK_COMPARATOR.sortedCopy(outputGroups.keySet()).iterator();
+    return ImmutableList.sortedCopyOf(outputGroups.keySet()).iterator();
   }
 
   @Override
@@ -289,14 +286,12 @@ public final class OutputGroupInfo extends StructImpl
     }
 
     @Override
-    public OutputGroupInfoApi constructor(Dict<?, ?> kwargs) throws EvalException {
-      Map<String, Object> kwargsMap = kwargs.getContents(String.class, Object.class, "kwargs");
-
+    public OutputGroupInfoApi constructor(Dict<String, Object> kwargs) throws EvalException {
       ImmutableMap.Builder<String, NestedSet<Artifact>> builder = ImmutableMap.builder();
-      for (Map.Entry<String, Object> entry : kwargsMap.entrySet()) {
+      for (Map.Entry<String, Object> entry : kwargs.entrySet()) {
         builder.put(
             entry.getKey(),
-            SkylarkRuleConfiguredTargetUtil.convertToOutputGroupValue(
+            StarlarkRuleConfiguredTargetUtil.convertToOutputGroupValue(
                 entry.getKey(), entry.getValue()));
       }
       return new OutputGroupInfo(builder.build());

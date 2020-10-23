@@ -14,16 +14,18 @@
 
 package com.google.devtools.build.lib.rules.java;
 
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
-import com.google.devtools.build.lib.skylarkbuildapi.java.JavaCcLinkParamsProviderApi;
-import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.starlarkbuildapi.java.JavaCcLinkParamsProviderApi;
+import net.starlark.java.eval.EvalException;
 
 /** A target that provides C++ libraries to be linked into Java targets. */
 @Immutable
-public final class JavaCcLinkParamsProvider implements Info, JavaCcLinkParamsProviderApi<CcInfo> {
+public final class JavaCcLinkParamsProvider
+    implements Info, JavaCcLinkParamsProviderApi<Artifact, CcInfo> {
   public static final String PROVIDER_NAME = "JavaCcLinkParamsInfo";
   public static final Provider PROVIDER = new Provider();
 
@@ -31,6 +33,11 @@ public final class JavaCcLinkParamsProvider implements Info, JavaCcLinkParamsPro
 
   public JavaCcLinkParamsProvider(CcInfo ccInfo) {
     this.ccInfo = CcInfo.builder().setCcLinkingContext(ccInfo.getCcLinkingContext()).build();
+  }
+
+  @Override
+  public boolean isImmutable() {
+    return true; // immutable and Starlark-hashable
   }
 
   @Override
@@ -45,13 +52,14 @@ public final class JavaCcLinkParamsProvider implements Info, JavaCcLinkParamsPro
 
   /** Provider class for {@link JavaCcLinkParamsProvider} objects. */
   public static class Provider extends BuiltinProvider<JavaCcLinkParamsProvider>
-      implements JavaCcLinkParamsProviderApi.Provider<CcInfo> {
+      implements JavaCcLinkParamsProviderApi.Provider<Artifact, CcInfo> {
     private Provider() {
       super(PROVIDER_NAME, JavaCcLinkParamsProvider.class);
     }
 
     @Override
-    public JavaCcLinkParamsProviderApi<CcInfo> createInfo(CcInfo ccInfo) throws EvalException {
+    public JavaCcLinkParamsProviderApi<Artifact, CcInfo> createInfo(CcInfo ccInfo)
+        throws EvalException {
       return new JavaCcLinkParamsProvider(ccInfo);
     }
   }

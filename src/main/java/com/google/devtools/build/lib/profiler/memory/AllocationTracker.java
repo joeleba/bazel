@@ -20,13 +20,9 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.MapMaker;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ConditionallyThreadCompatible;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleFunction;
-import com.google.devtools.build.lib.syntax.Debug;
-import com.google.devtools.build.lib.syntax.StarlarkCallable;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
 import com.google.monitoring.runtime.instrumentation.Sampler;
 import com.google.perftools.profiles.ProfileProto.Function;
 import com.google.perftools.profiles.ProfileProto.Line;
@@ -41,6 +37,10 @@ import java.util.Map;
 import java.util.Random;
 import java.util.zip.GZIPOutputStream;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Debug;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
 
 /** Tracks allocations for memory reporting. */
 @ConditionallyThreadCompatible
@@ -276,8 +276,8 @@ public final class AllocationTracker implements Sampler, Debug.ThreadHook {
     enabled = true;
   }
 
-  /** Dumps all skylark analysis time allocations to a pprof-compatible file. */
-  public void dumpSkylarkAllocations(String path) throws IOException {
+  /** Dumps all Starlark analysis time allocations to a pprof-compatible file. */
+  public void dumpStarlarkAllocations(String path) throws IOException {
     // Make sure we don't track our own allocations
     enabled = false;
     System.gc();

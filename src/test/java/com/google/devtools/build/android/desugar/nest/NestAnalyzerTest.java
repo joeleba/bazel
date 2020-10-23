@@ -19,11 +19,10 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.android.desugar.io.FileContentProvider;
-import com.google.devtools.build.android.desugar.langmodel.ClassAttributeRecord;
-import com.google.devtools.build.android.desugar.langmodel.ClassMemberRecord;
+import com.google.devtools.build.android.desugar.io.JarItem;
+import com.google.devtools.build.android.desugar.preanalysis.InputPreAnalyzer;
 import com.google.devtools.build.android.desugar.testing.junit.DesugarRule;
 import com.google.devtools.build.android.desugar.testing.junit.DesugarRunner;
-import com.google.devtools.build.android.desugar.testing.junit.JarEntryRecord;
 import com.google.devtools.build.android.desugar.testing.junit.JdkSuppress;
 import com.google.devtools.build.android.desugar.testing.junit.JdkVersion;
 import com.google.devtools.build.android.desugar.testing.junit.RuntimeJarEntry;
@@ -35,6 +34,7 @@ import java.util.jar.JarFile;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.objectweb.asm.Attribute;
 
 /** The tests for {@link NestAnalyzer}. */
 @RunWith(DesugarRunner.class)
@@ -51,15 +51,15 @@ public final class NestAnalyzerTest {
           .enableIterativeTransformation(0)
           .build();
 
-  private final ClassMemberRecord classMemberRecord = ClassMemberRecord.create();
-  private final ClassAttributeRecord classAttributeRecord = ClassAttributeRecord.create();
-  private final NestDigest nestDigest = NestDigest.create(classMemberRecord, classAttributeRecord);
-
   @Test
   public void emptyInputFiles() throws IOException {
-    NestAnalyzer nestAnalyzer =
-        new NestAnalyzer(ImmutableList.of(), nestDigest, classMemberRecord, classAttributeRecord);
-    nestAnalyzer.analyze();
+    InputPreAnalyzer inputPreAnalyzer =
+        new InputPreAnalyzer(/* inputFileContents= */ ImmutableList.of(), new Attribute[] {});
+    inputPreAnalyzer.process();
+    NestDigest nestDigest =
+        NestAnalyzer.digest(
+            inputPreAnalyzer.getClassAttributeRecord(), inputPreAnalyzer.getClassMemberRecord());
+
     assertThat(nestDigest.getAllCompanionClassNames()).isEmpty();
   }
 
@@ -68,23 +68,23 @@ public final class NestAnalyzerTest {
       @RuntimeJarEntry(
               value = "AnalyzedTarget.class",
               round = 0) // Without desugaring at zero-th round.
-          JarEntryRecord analyzedTarget)
+          JarItem analyzedTarget)
       throws IOException {
-
     JarFile jarFile = analyzedTarget.jarFile();
-    NestAnalyzer nestAnalyzer =
-        new NestAnalyzer(
+
+    InputPreAnalyzer inputPreAnalyzer =
+        new InputPreAnalyzer(
             jarFile.stream()
                 .map(
                     entry ->
                         new FileContentProvider<>(
                             entry.getName(), () -> getJarEntryInputStream(jarFile, entry)))
                 .collect(toImmutableList()),
-            nestDigest,
-            classMemberRecord,
-            classAttributeRecord);
-
-    nestAnalyzer.analyze();
+            new Attribute[] {});
+    inputPreAnalyzer.process();
+    NestDigest nestDigest =
+        NestAnalyzer.digest(
+            inputPreAnalyzer.getClassAttributeRecord(), inputPreAnalyzer.getClassMemberRecord());
 
     assertThat(nestDigest.getAllCompanionClassNames())
         .containsExactly(

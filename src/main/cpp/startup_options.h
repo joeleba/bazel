@@ -106,9 +106,21 @@ class StartupOptions {
       const blaze_util::Path &server_javabase, std::vector<std::string> *result,
       const std::vector<std::string> &user_options, std::string *error) const;
 
-  // Checks whether the argument is a valid nullary option.
-  // E.g. --master_bazelrc, --nomaster_bazelrc.
-  bool IsNullary(const std::string& arg) const;
+  // Checks whether "arg" is a valid nullary option (e.g. "--master_bazelrc" or
+  // "--nomaster_bazelrc").
+  //
+  // Returns true, if "arg" looks like either a valid nullary option or a
+  // potentially valid unary option. In this case, "result" will be populated
+  // with true iff "arg" is definitely a valid nullary option.
+  //
+  // Returns false, if "arg" looks like an attempt to pass a value to nullary
+  // option (e.g. "--nullary_option=idontknowwhatimdoing"). In this case,
+  // "error" will be populated with a user-friendly error message.
+  //
+  // Therefore, callers of this function should look at the return value and
+  // then either look at "result" (on true) or "error" (on false).
+  bool MaybeCheckValidNullary(const std::string &arg, bool *result,
+                              std::string *error) const;
 
   // Checks whether the argument is a valid unary option.
   // E.g. --blazerc=foo, --blazerc foo.
@@ -122,6 +134,10 @@ class StartupOptions {
   // If supplied, alternate location to write the blaze server's jvm's stdout.
   // Otherwise a default path in the output base is used.
   blaze_util::Path server_jvm_out;
+
+  // If supplied, alternate location to write a serialized failure_detail proto.
+  // Otherwise a default path in the output base is used.
+  blaze_util::Path failure_detail_out;
 
   // Blaze's output base.  Everything is relative to this.  See
   // the BlazeDirectories Java class for details.
@@ -141,10 +157,6 @@ class StartupOptions {
 
   // Override more finegrained rc file flags and ignore them all.
   bool ignore_all_rc_files;
-
-  // Whether to put the execroot at $OUTPUT_BASE/$WORKSPACE_NAME (if false) or
-  // $OUTPUT_BASE/execroot/$WORKSPACE_NAME (if true).
-  bool deep_execroot;
 
   // Block for the Blaze server lock. Otherwise,
   // quit with non-0 exit code if lock can't
@@ -238,6 +250,8 @@ class StartupOptions {
   // The hash function to use when computing file digests.
   std::string digest_function;
 
+  std::string unix_digest_hash_attribute_name;
+
   bool idle_server_tasks;
 
   // The startup options as received from the user and rc files, tagged with
@@ -256,6 +270,10 @@ class StartupOptions {
   // transition. This must be set before rule classes are constructed.
   // See https://github.com/bazelbuild/bazel/issues/7935
   bool incompatible_enable_execution_transition;
+
+  // Whether to create symbolic links on Windows for files. Requires
+  // developer mode to be enabled.
+  bool windows_enable_symlinks;
 
  protected:
   // Constructor for subclasses only so that site-specific extensions of this

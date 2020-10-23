@@ -14,8 +14,8 @@
 package com.google.devtools.build.lib.unix;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
@@ -36,13 +36,13 @@ import org.junit.runners.JUnit4;
 /** Tests for the {@link NativePosixFiles} class. */
 @RunWith(JUnit4.class)
 public class NativePosixFilesTest {
-  private FileSystem testFS;
+
   private Path workingDir;
   private Path testFile;
 
   @Before
   public final void createFileSystem() throws Exception  {
-    testFS = new UnixFileSystem(DigestHashFunction.getDefaultUnchecked());
+    FileSystem testFS = new UnixFileSystem(DigestHashFunction.SHA256, /*hashAttributeName=*/ "");
     workingDir = testFS.getPath(new File(TestUtils.tmpDir()).getCanonicalPath());
     testFile = workingDir.getRelative("test");
   }
@@ -80,18 +80,19 @@ public class NativePosixFilesTest {
   }
 
   @Test
-  public void testGetxattr_AttributeFound() throws Exception {
+  public void testGetxattr_attributeFound() throws Exception {
     assumeXattrsSupported();
 
     String myfile = Files.createTempFile("getxattrtest", null).toString();
-    Runtime.getRuntime().exec("xattr -w foo bar " + myfile).waitFor();
+    assertThat(new ProcessBuilder("xattr", "-w", "foo", "bar", myfile).start().waitFor())
+        .isEqualTo(0);
 
     assertThat(new String(NativePosixFiles.getxattr(myfile, "foo"), UTF_8)).isEqualTo("bar");
     assertThat(new String(NativePosixFiles.lgetxattr(myfile, "foo"), UTF_8)).isEqualTo("bar");
   }
 
   @Test
-  public void testGetxattr_AttributeNotFoundReturnsNull() throws Exception {
+  public void testGetxattr_attributeNotFoundReturnsNull() throws Exception {
     assumeXattrsSupported();
 
     String myfile = Files.createTempFile("getxattrtest", null).toString();
@@ -101,7 +102,7 @@ public class NativePosixFilesTest {
   }
 
   @Test
-  public void testGetxattr_FileNotFound() throws Exception {
+  public void testGetxattr_fileNotFound() throws Exception {
     String nonexistentFile = workingDir.getChild("nonexistent").toString();
 
     assertThrows(

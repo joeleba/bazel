@@ -15,10 +15,11 @@ package com.google.devtools.build.lib.analysis;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.analysis.util.BuildViewTestBase.AnalysisFailureRecorder;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -150,7 +151,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
                           .allowedFileTypes(FileTypeSet.ANY_FILE)));
 
   @Override
-  protected ConfiguredRuleClassProvider getRuleClassProvider() {
+  protected ConfiguredRuleClassProvider createRuleClassProvider() {
     ConfiguredRuleClassProvider.Builder builder =
         new ConfiguredRuleClassProvider.Builder()
             .addRuleDefinition(RULE_WITH_OUTPUT_ATTR)
@@ -477,7 +478,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "    out = 'b.out')");
     writeHelloRules(/*includeDefaultCondition=*/true);
     assertThat(getConfiguredTarget("//java/hello:hello")).isNull();
-    assertContainsEvent("//conditions:b is not a valid configuration key for //java/hello:hello");
+    assertContainsEvent("//conditions:b is not a valid select() condition for //java/hello:hello");
     assertDoesNotContainEvent("//conditions:a"); // This one is legitimate..
   }
 
@@ -491,19 +492,26 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "    cmd = select({':fake': ''})",
         ")");
     assertThat(getConfiguredTarget("//foo:g")).isNull();
-    assertContainsEvent("//foo:fake is not a valid configuration key for //foo:g");
+    assertContainsEvent("//foo:fake is not a valid select() condition for //foo:g");
   }
 
   @Test
   public void configKeyNonexistentTarget_otherPackage() throws Exception {
     reporter.removeHandler(failFastHandler); // Expect errors.
+    scratch.file(
+        "conditions/BUILD",
+        "config_setting(",
+        "    name = 'a',",
+        "    values = {'test_arg': 'a'})");
     scratch.file("bar/BUILD");
     scratch.file(
         "foo/BUILD",
         "genrule(",
         "    name = 'g',",
         "    outs = ['g.out'],",
-        "    cmd = select({'//bar:fake': ''})",
+        // With an invalid target and a real target, validate skyframe error handling.
+        // See http://b/162021059 for details.
+        "    cmd = select({'//bar:fake': '', '//conditions:a': ''})",
         ")");
     assertThat(getConfiguredTarget("//foo:g")).isNull();
     assertContainsEvent(
@@ -725,15 +733,33 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "))");
 
     reporter.removeHandler(failFastHandler);
+    AnalysisFailureRecorder analysisFailureRecorder = new AnalysisFailureRecorder();
+    eventBus.register(analysisFailureRecorder);
     useConfiguration("");
 
     assertThat(getConfiguredTarget("//java/hello:hello_default_no_match_error")).isNull();
     String commonPrefix = "Configurable attribute \"srcs\" doesn't match this configuration";
     assertContainsEvent(commonPrefix + " (would a default condition help?).\nConditions checked:");
+    // Verify a Root Cause is reported when a target cannot be configured due to no matching config.
+    assertThat(analysisFailureRecorder.causes).hasSize(1);
+    AnalysisRootCauseEvent rootCause = analysisFailureRecorder.causes.get(0);
+    assertThat(rootCause.getLabel())
+        .isEqualTo(
+            Label.parseAbsolute("//java/hello:hello_default_no_match_error", ImmutableMap.of()));
 
+    eventBus.unregister(analysisFailureRecorder);
+    analysisFailureRecorder = new AnalysisFailureRecorder();
+    eventBus.register(analysisFailureRecorder);
     eventCollector.clear();
+
     assertThat(getConfiguredTarget("//java/hello:hello_custom_no_match_error")).isNull();
     assertContainsEvent(commonPrefix + ": You always have to choose condition a!");
+    // Verify a Root Cause is reported when a target cannot be configured due to no matching config.
+    assertThat(analysisFailureRecorder.causes).hasSize(1);
+    rootCause = analysisFailureRecorder.causes.get(0);
+    assertThat(rootCause.getLabel())
+        .isEqualTo(
+            Label.parseAbsolute("//java/hello:hello_custom_no_match_error", ImmutableMap.of()));
   }
 
   @Test
@@ -1136,9 +1162,6 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "    name = 'b',",
         "    constraint_values = [':banana']",
         ")");
-    scratch.file("afile", "acontents");
-    scratch.file("bfile", "bcontents");
-    scratch.file("defaultfile", "defaultcontents");
     scratch.file(
         "check/BUILD",
         "filegroup(name = 'adep', srcs = ['afile'])",
@@ -1156,6 +1179,79 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         ImmutableList.of("--experimental_platforms=//conditions:apple_platform"),
         /*expected:*/ ImmutableList.of("src check/afile"),
         /*not expected:*/ ImmutableList.of("src check/bfile", "src check/defaultfile"));
+  }
+
+  @Test
+  public void selectDirectlyOnConstraints() throws Exception {
+    // Tests select()ing directly on a constraint_value (with no intermediate config_setting).
+    scratch.file(
+        "conditions/BUILD",
+        "constraint_setting(name = 'fruit')",
+        "constraint_value(name = 'apple', constraint_setting = 'fruit')",
+        "constraint_value(name = 'banana', constraint_setting = 'fruit')",
+        "platform(",
+        "    name = 'apple_platform',",
+        "    constraint_values = [':apple'],",
+        ")",
+        "platform(",
+        "    name = 'banana_platform',",
+        "    constraint_values = [':banana'],",
+        ")");
+    scratch.file(
+        "check/defs.bzl",
+        "def _impl(ctx):",
+        "  pass",
+        "simple_rule = rule(",
+        "  implementation = _impl,",
+        "  attrs = {'srcs': attr.label_list(allow_files = True)}",
+        ")");
+    scratch.file(
+        "check/BUILD",
+        "load('//check:defs.bzl', 'simple_rule')",
+        "filegroup(name = 'adep', srcs = ['afile'])",
+        "filegroup(name = 'bdep', srcs = ['bfile'])",
+        "simple_rule(name = 'hello',",
+        "    srcs = select({",
+        "        '//conditions:apple': [':adep'],",
+        "        '//conditions:banana': [':bdep'],",
+        "    }))");
+    checkRule(
+        "//check:hello",
+        "srcs",
+        ImmutableList.of("--platforms=//conditions:apple_platform"),
+        /*expected:*/ ImmutableList.of("src check/afile"),
+        /*not expected:*/ ImmutableList.of("src check/bfile", "src check/defaultfile"));
+    checkRule(
+        "//check:hello",
+        "srcs",
+        ImmutableList.of("--platforms=//conditions:banana_platform"),
+        /*expected:*/ ImmutableList.of("src check/bfile"),
+        /*not expected:*/ ImmutableList.of("src check/afile", "src check/defaultfile"));
+  }
+
+  @Test
+  public void nonToolchainResolvingTargetsCantSelectDirectlyOnConstraints() throws Exception {
+    // Tests select()ing directly on a constraint_value (with no intermediate config_setting).
+    scratch.file(
+        "conditions/BUILD",
+        "constraint_setting(name = 'fruit')",
+        "constraint_value(name = 'apple', constraint_setting = 'fruit')",
+        "platform(",
+        "    name = 'apple_platform',",
+        "    constraint_values = [':apple'],",
+        ")");
+    scratch.file(
+        "check/BUILD",
+        "filegroup(name = 'adep', srcs = ['afile'])",
+        "filegroup(name = 'hello',",
+        "    srcs = select({",
+        "        '//conditions:apple': [':adep'],",
+        "    })",
+        ")");
+    reporter.removeHandler(failFastHandler);
+    useConfiguration("--platforms=//conditions:apple_platform");
+    assertThat(getConfiguredTarget("//check:hello")).isNull();
+    assertContainsEvent("//conditions:apple is not a valid select() condition for //check:hello");
   }
 
   @Test

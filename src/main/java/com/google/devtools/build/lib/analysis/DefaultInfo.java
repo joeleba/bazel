@@ -14,16 +14,16 @@
 package com.google.devtools.build.lib.analysis;
 
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.collect.nestedset.Depset;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.skylarkbuildapi.DefaultInfoApi;
-import com.google.devtools.build.lib.syntax.Depset;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Starlark;
-import com.google.devtools.build.lib.syntax.StarlarkThread;
+import com.google.devtools.build.lib.starlarkbuildapi.DefaultInfoApi;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.syntax.Location;
 
 /** DefaultInfo is provided by all targets implicitly and contains all standard fields. */
 @Immutable
@@ -106,7 +106,7 @@ public final class DefaultInfo extends NativeInfo implements DefaultInfoApi {
   @Override
   public Runfiles getDefaultRunfiles() {
     if (dataRunfiles == null && defaultRunfiles == null) {
-      // This supports the legacy skylark runfiles constructor -- if the 'runfiles' attribute
+      // This supports the legacy Starlark runfiles constructor -- if the 'runfiles' attribute
       // is used, then default_runfiles will return all runfiles.
       return runfiles;
     } else {

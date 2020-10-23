@@ -14,9 +14,9 @@
 package com.google.devtools.build.lib.analysis.actions;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.Arrays.asList;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLine;
+import com.google.devtools.build.lib.actions.ExecutionRequirements.WorkerProtocolFormat;
 import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ParameterFile.ParameterFileType;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
@@ -482,6 +483,7 @@ public class SpawnActionTest extends BuildViewTestCase {
         builder()
             .addInput(input)
             .addOutput(output)
+            .setMnemonic("ActionToolMnemonic")
             .setExecutionInfo(executionInfoVariables)
             .setExecutable(scratch.file("/bin/xxx").asFragment())
             .build(ActionsTestUtil.NULL_ACTION_OWNER, targetConfig);
@@ -502,6 +504,50 @@ public class SpawnActionTest extends BuildViewTestCase {
             ImmutableMap.<String, String>of("supports-multiplex-workers", "1"));
     assertThat(Spawns.supportsMultiplexWorkers(multiplexWorkerSupportSpawn.getSpawn()))
         .isEqualTo(true);
+  }
+
+  @Test
+  public void testWorkerProtocolFormat_defaultIsProto() throws Exception {
+    SpawnAction spawn =
+        createWorkerSupportSpawn(ImmutableMap.<String, String>of("supports-workers", "1"));
+    assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
+        .isEqualTo(WorkerProtocolFormat.PROTO);
+  }
+
+  @Test
+  public void testWorkerProtocolFormat_explicitProto() throws Exception {
+    SpawnAction spawn =
+        createWorkerSupportSpawn(
+            ImmutableMap.<String, String>of(
+                "supports-workers", "1", "requires-worker-protocol", "proto"));
+    assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
+        .isEqualTo(WorkerProtocolFormat.PROTO);
+  }
+
+  @Test
+  public void testWorkerProtocolFormat_explicitJson() throws Exception {
+    SpawnAction spawn =
+        createWorkerSupportSpawn(
+            ImmutableMap.<String, String>of(
+                "supports-workers", "1", "requires-worker-protocol", "json"));
+    assertThat(Spawns.getWorkerProtocolFormat(spawn.getSpawn()))
+        .isEqualTo(WorkerProtocolFormat.JSON);
+  }
+
+  @Test
+  public void testWorkerMnemonicDefault() throws Exception {
+    SpawnAction defaultMnemonicSpawn = createWorkerSupportSpawn(ImmutableMap.<String, String>of());
+    assertThat(Spawns.getWorkerKeyMnemonic(defaultMnemonicSpawn.getSpawn()))
+        .isEqualTo("ActionToolMnemonic");
+  }
+
+  @Test
+  public void testWorkerMnemonicOverride() throws Exception {
+    SpawnAction customMnemonicSpawn =
+        createWorkerSupportSpawn(
+            ImmutableMap.<String, String>of("worker-key-mnemonic", "ToolPoolMnemonic"));
+    assertThat(Spawns.getWorkerKeyMnemonic(customMnemonicSpawn.getSpawn()))
+        .isEqualTo("ToolPoolMnemonic");
   }
 
   private static RunfilesSupplier runfilesSupplier(Artifact manifest, PathFragment dir) {

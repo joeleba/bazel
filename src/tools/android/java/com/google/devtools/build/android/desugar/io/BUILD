@@ -12,10 +12,12 @@ java_library(
     ],
     deps = [
         "//src/tools/android/java/com/google/devtools/build/android/desugar/langmodel",
+        "//src/tools/android/java/com/google/devtools/build/android/ziputils:ziputils_lib",
         "//third_party:asm",
         "//third_party:asm-commons",
         "//third_party:asm-tree",
         "//third_party:auto_value",
+        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party:jsr330_inject",

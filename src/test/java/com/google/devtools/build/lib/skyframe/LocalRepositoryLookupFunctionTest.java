@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.FileStateValue;
@@ -33,7 +32,6 @@ import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper.ExternalFileAction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -54,7 +52,9 @@ import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import net.starlark.java.eval.StarlarkSemantics;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -93,7 +93,8 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
         new PackageLookupFunction(
             deletedPackages,
             CrossRepositoryLabelViolationStrategy.ERROR,
-            BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY));
+            BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY,
+            BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER));
     skyFunctions.put(
         FileStateValue.FILE_STATE,
         new FileStateFunction(
@@ -107,7 +108,6 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
         new DirectoryListingStateFunction(
             externalFilesHelper, new AtomicReference<>(UnixGlob.DEFAULT_SYSCALLS)));
     RuleClassProvider ruleClassProvider = analysisMock.createRuleClassProvider();
-    skyFunctions.put(SkyFunctions.WORKSPACE_AST, new WorkspaceASTFunction(ruleClassProvider));
     skyFunctions.put(
         WorkspaceFileValue.WORKSPACE_FILE,
         new WorkspaceFileFunction(
@@ -116,9 +116,13 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
                 .getPackageFactoryBuilderForTesting(directories)
                 .build(ruleClassProvider, fileSystem),
             directories,
-            /*skylarkImportLookupFunctionForInlining=*/ null));
-    skyFunctions.put(SkyFunctions.EXTERNAL_PACKAGE, new ExternalPackageFunction());
-    skyFunctions.put(SkyFunctions.LOCAL_REPOSITORY_LOOKUP, new LocalRepositoryLookupFunction());
+            /*bzlLoadFunctionForInlining=*/ null));
+    skyFunctions.put(
+        SkyFunctions.EXTERNAL_PACKAGE,
+        new ExternalPackageFunction(BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER));
+    skyFunctions.put(
+        SkyFunctions.LOCAL_REPOSITORY_LOOKUP,
+        new LocalRepositoryLookupFunction(BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER));
     skyFunctions.put(
         SkyFunctions.FILE_SYMLINK_CYCLE_UNIQUENESS, new FileSymlinkCycleUniquenessFunction());
 
@@ -126,12 +130,12 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
     evaluator = new InMemoryMemoizingEvaluator(skyFunctions, differencer);
     driver = new SequentialBuildDriver(evaluator);
     PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, pkgLocator.get());
-    PrecomputedValue.STARLARK_SEMANTICS.set(differencer, StarlarkSemantics.DEFAULT_SEMANTICS);
+    PrecomputedValue.STARLARK_SEMANTICS.set(differencer, StarlarkSemantics.DEFAULT);
     RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE.set(
-        differencer, Optional.<RootedPath>absent());
+        differencer, Optional.empty());
   }
 
-  private SkyKey createKey(RootedPath directory) {
+  private static SkyKey createKey(RootedPath directory) {
     return LocalRepositoryLookupValue.key(directory);
   }
 
@@ -147,7 +151,7 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
             .setNumThreads(SkyframeExecutor.DEFAULT_THREAD_COUNT)
-            .setEventHander(NullEventHandler.INSTANCE)
+            .setEventHandler(NullEventHandler.INSTANCE)
             .build();
     return driver.<LocalRepositoryLookupValue>evaluate(
         ImmutableList.of(directoryKey), evaluationContext);
@@ -270,7 +274,7 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
   }
 
   @Test
-  public void testLocalRepository_LocalWorkspace_SymlinkCycle() throws Exception {
+  public void testLocalRepository_localWorkspace_symlinkCycle() throws Exception {
     scratch.overwriteFile("WORKSPACE", "local_repository(name='local', path='local/repo')");
     Path localRepoWorkspace = scratch.resolve("local/repo/WORKSPACE");
     Path localRepoWorkspaceLink = scratch.resolve("local/repo/WORKSPACE.link");
@@ -296,7 +300,7 @@ public class LocalRepositoryLookupFunctionTest extends FoundationTestCase {
   }
 
   @Test
-  public void testLocalRepository_MainWorkspace_NotFound() throws Exception {
+  public void testLocalRepository_mainWorkspace_notFound() throws Exception {
     // Do not add a local_repository to WORKSPACE.
     scratch.overwriteFile("WORKSPACE", "");
     scratch.deleteFile("WORKSPACE");

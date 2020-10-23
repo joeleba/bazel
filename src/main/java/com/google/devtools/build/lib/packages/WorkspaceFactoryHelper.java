@@ -17,19 +17,20 @@ package com.google.devtools.build.lib.packages;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.base.Verify;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
-import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.RuleFactory.BuildLangTypedAttributeValuesMap;
-import com.google.devtools.build.lib.syntax.Dict;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import java.util.Map;
 import java.util.stream.Collectors;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
 
 /** A helper for the {@link WorkspaceFactory} to create repository rules */
 public class WorkspaceFactoryHelper {
@@ -39,48 +40,23 @@ public class WorkspaceFactoryHelper {
       RuleClass ruleClass,
       RuleClass bindRuleClass,
       Map<String, Object> kwargs,
-      Location loc)
+      StarlarkSemantics semantics,
+      ImmutableList<StarlarkThread.CallStackEntry> callstack)
       throws RuleFactory.InvalidRuleException, Package.NameConflictException, LabelSyntaxException,
           InterruptedException {
-    return createAndAddRepositoryRule(pkg, ruleClass, bindRuleClass, kwargs, loc, null);
-  }
-
-  public static Rule createAndAddRepositoryRule(
-      Package.Builder pkg,
-      RuleClass ruleClass,
-      RuleClass bindRuleClass,
-      Map<String, Object> kwargs,
-      Location loc,
-      String definitionInfo)
-      throws RuleFactory.InvalidRuleException, Package.NameConflictException, LabelSyntaxException,
-          InterruptedException {
-
     StoredEventHandler eventHandler = new StoredEventHandler();
     BuildLangTypedAttributeValuesMap attributeValues = new BuildLangTypedAttributeValuesMap(kwargs);
     Rule rule =
-        RuleFactory.createRule(
-            pkg,
-            ruleClass,
-            attributeValues,
-            eventHandler,
-            loc,
-            /* thread= */ null,
-            new AttributeContainer(ruleClass));
+        RuleFactory.createRule(pkg, ruleClass, attributeValues, eventHandler, semantics, callstack);
     pkg.addEvents(eventHandler.getEvents());
     pkg.addPosts(eventHandler.getPosts());
     overwriteRule(pkg, rule);
     for (Map.Entry<String, Label> entry :
         ruleClass.getExternalBindingsFunction().apply(rule).entrySet()) {
       Label nameLabel = Label.parseAbsolute("//external:" + entry.getKey(), ImmutableMap.of());
-      addBindRule(
-          pkg,
-          bindRuleClass,
-          nameLabel,
-          entry.getValue(),
-          rule.getLocation(),
-          new AttributeContainer(bindRuleClass));
+      addBindRule(pkg, bindRuleClass, nameLabel, entry.getValue(), semantics, callstack);
     }
-    rule.setDefinitionInformation(definitionInfo);
+    pkg.addRegisteredToolchains(ruleClass.getToolchainsToRegisterFunction().apply(rule));
     return rule;
   }
 
@@ -109,11 +85,14 @@ public class WorkspaceFactoryHelper {
    * should also evaluate to the same thing.
    */
   public static void addMainRepoEntry(
-      Package.Builder builder, String externalRepoName, StarlarkSemantics semantics) {
+      Package.Builder builder, String externalRepoName, StarlarkSemantics semantics)
+      throws LabelSyntaxException {
     if (!Strings.isNullOrEmpty(builder.getPackageWorkspaceName())) {
+      // Create repository names with validation, LabelSyntaxException is thrown is the name
+      // is not valid.
       builder.addRepositoryMappingEntry(
-          RepositoryName.createFromValidStrippedName(externalRepoName),
-          RepositoryName.createFromValidStrippedName(builder.getPackageWorkspaceName()),
+          RepositoryName.create("@" + externalRepoName),
+          RepositoryName.create("@" + builder.getPackageWorkspaceName()),
           RepositoryName.MAIN);
     }
   }
@@ -121,28 +100,19 @@ public class WorkspaceFactoryHelper {
   /**
    * Processes {@code repo_mapping} attribute and populates the package builder with the mappings.
    *
-   * @throws EvalException if {@code repo_mapping} is present in kwargs but is not a {@link Dict}
+   * @throws EvalException if {@code repo_mapping} is present in kwargs but is not a
+   *     string-to-string dict.
    */
   public static void addRepoMappings(
-      Package.Builder builder,
-      Map<String, Object> kwargs,
-      String externalRepoName,
-      Location location)
+      Package.Builder builder, Map<String, Object> kwargs, String externalRepoName)
       throws EvalException, LabelSyntaxException {
-
-    if (kwargs.containsKey("repo_mapping")) {
-      if (!(kwargs.get("repo_mapping") instanceof Dict)) {
-        throw new EvalException(
-            location,
-            "Invalid value for 'repo_mapping': '"
-                + kwargs.get("repo_mapping")
-                + "'. Value must be a dict.");
-      }
-      @SuppressWarnings("unchecked")
-      Map<String, String> map = (Map<String, String>) kwargs.get("repo_mapping");
-      for (Map.Entry<String, String> e : map.entrySet()) {
+    Object repoMapping = kwargs.get("repo_mapping");
+    if (repoMapping != null) {
+      for (Map.Entry<String, String> e :
+          Dict.cast(repoMapping, String.class, String.class, "repo_mapping").entrySet()) {
+        // Create repository names with validation; may throw LabelSyntaxException.
         builder.addRepositoryMappingEntry(
-            RepositoryName.createFromValidStrippedName(externalRepoName),
+            RepositoryName.create("@" + externalRepoName),
             RepositoryName.create(e.getKey()),
             RepositoryName.create(e.getValue()));
       }
@@ -154,8 +124,8 @@ public class WorkspaceFactoryHelper {
       RuleClass bindRuleClass,
       Label virtual,
       Label actual,
-      Location location,
-      AttributeContainer attributeContainer)
+      StarlarkSemantics semantics,
+      ImmutableList<StarlarkThread.CallStackEntry> callstack)
       throws RuleFactory.InvalidRuleException, Package.NameConflictException, InterruptedException {
 
     Map<String, Object> attributes = Maps.newHashMap();
@@ -169,14 +139,7 @@ public class WorkspaceFactoryHelper {
     BuildLangTypedAttributeValuesMap attributeValues =
         new BuildLangTypedAttributeValuesMap(attributes);
     Rule rule =
-        RuleFactory.createRule(
-            pkg,
-            bindRuleClass,
-            attributeValues,
-            handler,
-            location,
-            /* thread= */ null,
-            attributeContainer);
+        RuleFactory.createRule(pkg, bindRuleClass, attributeValues, handler, semantics, callstack);
     overwriteRule(pkg, rule);
     rule.setVisibility(ConstantRuleVisibility.PUBLIC);
   }

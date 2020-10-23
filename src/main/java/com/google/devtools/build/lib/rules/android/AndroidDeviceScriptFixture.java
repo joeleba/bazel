@@ -24,7 +24,6 @@ import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
-import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.Type;
 
@@ -70,7 +69,7 @@ public class AndroidDeviceScriptFixture implements RuleConfiguredTargetFactory {
     if (ruleContext.attributes().isAttributeValueExplicitlySpecified("cmd")) {
       cmd = ruleContext.attributes().get("cmd", Type.STRING);
     }
-    TransitiveInfoCollection script = ruleContext.getPrerequisite("script", Mode.TARGET);
+    TransitiveInfoCollection script = ruleContext.getPrerequisite("script");
 
     if (((cmd == null) && (script == null)) || ((cmd != null) && (script != null))) {
       ruleContext.throwWithRuleError(

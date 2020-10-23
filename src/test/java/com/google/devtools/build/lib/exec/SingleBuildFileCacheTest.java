@@ -15,13 +15,14 @@
 package com.google.devtools.build.lib.exec;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.DigestOfDirectoryException;
 import com.google.devtools.build.lib.testutil.Suite;
 import com.google.devtools.build.lib.testutil.TestSpec;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -51,7 +52,7 @@ public class SingleBuildFileCacheTest {
     calls = new HashMap<>();
     digestOverrides = new HashMap<>();
     fs =
-        new InMemoryFileSystem() {
+        new InMemoryFileSystem(DigestHashFunction.SHA256) {
           @Override
           protected InputStream getInputStream(Path path) throws IOException {
             int c = calls.containsKey(path.toString()) ? calls.get(path.toString()) : 0;

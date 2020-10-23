@@ -16,13 +16,14 @@ package com.google.devtools.build.lib.dynamic;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertThrows;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -32,10 +33,10 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BaseSpawn;
+import com.google.devtools.build.lib.actions.DynamicStrategyRegistry;
 import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Executor;
-import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SandboxedSpawnStrategy;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -46,10 +47,14 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
 import com.google.devtools.build.lib.exec.BlazeExecutor;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
-import com.google.devtools.build.lib.exec.ExecutorBuilder;
-import com.google.devtools.build.lib.exec.SpawnActionContextMaps;
+import com.google.devtools.build.lib.exec.ModuleActionContextRegistry;
+import com.google.devtools.build.lib.exec.SpawnStrategyRegistry;
+import com.google.devtools.build.lib.server.FailureDetails.DynamicExecution;
+import com.google.devtools.build.lib.server.FailureDetails.DynamicExecution.Code;
+import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.testutil.TestThread;
 import com.google.devtools.build.lib.testutil.TestUtils;
+import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -67,7 +72,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Logger;
 import javax.annotation.Nullable;
 import org.junit.After;
 import org.junit.Before;
@@ -80,6 +84,8 @@ import org.junit.runners.Parameterized.Parameters;
 /** Tests for {@link DynamicSpawnStrategy}. */
 @RunWith(Parameterized.class)
 public class DynamicSpawnStrategyTest {
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
   private Path testRoot;
   private ExecutorService executorServiceForCleanup;
   private FileOutErr outErr;
@@ -149,7 +155,7 @@ public class DynamicSpawnStrategyTest {
       } catch (IOException e) {
         throw new IllegalStateException(e);
       }
-      throw new UserExecException(name + " failed to execute the Spawn");
+      throw new UserExecException(createFailureDetail(name + " failed to execute the Spawn"));
     }
 
     @Override
@@ -211,7 +217,7 @@ public class DynamicSpawnStrategyTest {
 
   @Before
   public void setUp() throws Exception {
-    testRoot = FileSystems.getNativeFileSystem().getPath(TestUtils.tmpDir());
+    testRoot = FileSystems.getNativeFileSystem().getPath(TestUtils.tmpDir()).getRelative("test");
     testRoot.deleteTreesBelow();
     outErr = new FileOutErr(testRoot.getRelative("stdout"), testRoot.getRelative("stderr"));
   }
@@ -223,11 +229,11 @@ public class DynamicSpawnStrategyTest {
    * @param localStrategy the strategy for local execution
    * @param remoteStrategy the strategy for remote execution
    * @return the constructed dynamic strategy
-   * @throws ExecutorInitException if creating the strategy with the given parameters fails
+   * @throws AbruptExitException if creating the strategy with the given parameters fails
    */
   private StrategyAndContext createSpawnStrategy(
       MockSpawnStrategy localStrategy, MockSpawnStrategy remoteStrategy)
-      throws ExecutorInitException {
+      throws AbruptExitException {
     return createSpawnStrategyWithExecutor(
         localStrategy, remoteStrategy, Executors.newCachedThreadPool());
   }
@@ -243,13 +249,13 @@ public class DynamicSpawnStrategyTest {
    * @param remoteStrategy the default strategy for remote execution
    * @param sandboxedStrategy the strategy to use when the mnemonic matches {@code testMnemonic}.
    * @return the constructed dynamic strategy
-   * @throws ExecutorInitException if creating the strategy with the given parameters fails
+   * @throws AbruptExitException if creating the strategy with the given parameters fails
    */
   private StrategyAndContext createSpawnStrategy(
       MockSpawnStrategy localStrategy,
       MockSpawnStrategy remoteStrategy,
       @Nullable MockSpawnStrategy sandboxedStrategy)
-      throws ExecutorInitException {
+      throws AbruptExitException {
     return createSpawnStrategyWithExecutor(
         localStrategy, remoteStrategy, sandboxedStrategy, Executors.newCachedThreadPool());
   }
@@ -261,13 +267,13 @@ public class DynamicSpawnStrategyTest {
    * @param remoteStrategy the strategy for remote execution
    * @param executorService the executor to pass to the dynamic strategy
    * @return the constructed dynamic strategy
-   * @throws ExecutorInitException if creating the strategy with the given parameters fails
+   * @throws AbruptExitException if creating the strategy with the given parameters fails
    */
   private StrategyAndContext createSpawnStrategyWithExecutor(
       MockSpawnStrategy localStrategy,
       MockSpawnStrategy remoteStrategy,
       ExecutorService executorService)
-      throws ExecutorInitException {
+      throws AbruptExitException {
     return createSpawnStrategyWithExecutor(localStrategy, remoteStrategy, null, executorService);
   }
 
@@ -283,14 +289,14 @@ public class DynamicSpawnStrategyTest {
    * @param sandboxedStrategy the strategy to use when the mnemonic matches {@code testMnemonic}.
    * @param executorService the executor to pass to the dynamic strategy
    * @return the constructed dynamic strategy
-   * @throws ExecutorInitException if creating the strategy with the given parameters fails
+   * @throws AbruptExitException if creating the strategy with the given parameters fails
    */
   private StrategyAndContext createSpawnStrategyWithExecutor(
       MockSpawnStrategy localStrategy,
       MockSpawnStrategy remoteStrategy,
       @Nullable MockSpawnStrategy sandboxedStrategy,
       ExecutorService executorService)
-      throws ExecutorInitException {
+      throws AbruptExitException {
     ImmutableList.Builder<Map.Entry<String, List<String>>> dynamicLocalStrategies =
         ImmutableList.<Map.Entry<String, List<String>>>builder()
             .add(Maps.immutableEntry("", ImmutableList.of("mock-local")));
@@ -316,17 +322,27 @@ public class DynamicSpawnStrategyTest {
     checkState(executorServiceForCleanup == null);
     executorServiceForCleanup = executorService;
 
-    ExecutorBuilder executorBuilder =
-        new ExecutorBuilder()
-            .addActionContext(SpawnStrategy.class, localStrategy, "mock-local")
-            .addActionContext(SpawnStrategy.class, remoteStrategy, "mock-remote");
+    ModuleActionContextRegistry.Builder moduleActionContextRegistryBuilder =
+        ModuleActionContextRegistry.builder();
+    SpawnStrategyRegistry.Builder spawnStrategyRegistryBuilder = SpawnStrategyRegistry.builder();
+
+    spawnStrategyRegistryBuilder.registerStrategy(localStrategy, "mock-local");
+    spawnStrategyRegistryBuilder.registerStrategy(remoteStrategy, "mock-remote");
 
     if (sandboxedStrategy != null) {
-      executorBuilder.addActionContext(SpawnStrategy.class, sandboxedStrategy, "mock-sandboxed");
+      spawnStrategyRegistryBuilder.registerStrategy(sandboxedStrategy, "mock-sandboxed");
     }
 
-    new DynamicExecutionModule(executorService).initStrategies(executorBuilder, options);
-    SpawnActionContextMaps spawnActionContextMaps = executorBuilder.getSpawnActionContextMaps();
+    DynamicExecutionModule dynamicExecutionModule = new DynamicExecutionModule(executorService);
+    dynamicExecutionModule.registerSpawnStrategies(spawnStrategyRegistryBuilder, options);
+
+    SpawnStrategyRegistry spawnStrategyRegistry = spawnStrategyRegistryBuilder.build();
+
+    moduleActionContextRegistryBuilder.register(SpawnStrategyRegistry.class, spawnStrategyRegistry);
+    moduleActionContextRegistryBuilder.register(
+        DynamicStrategyRegistry.class, spawnStrategyRegistry);
+    ModuleActionContextRegistry moduleActionContextRegistry =
+        moduleActionContextRegistryBuilder.build();
 
     Executor executor =
         new BlazeExecutor(
@@ -337,7 +353,8 @@ public class DynamicSpawnStrategyTest {
             OptionsParser.builder()
                 .optionsClasses(ImmutableList.of(ExecutionOptions.class))
                 .build(),
-            spawnActionContextMaps);
+            moduleActionContextRegistry,
+            spawnStrategyRegistry);
 
     ActionExecutionContext actionExecutionContext =
         ActionsTestUtil.createContext(
@@ -349,8 +366,12 @@ public class DynamicSpawnStrategyTest {
             /*metadataHandler=*/ null,
             /*actionGraph=*/ null);
 
-    Optional<ActionContext> optionalContext =
-        spawnActionContextMaps.allContexts().stream()
+    List<? extends SpawnStrategy> dynamicStrategies =
+        spawnStrategyRegistry.getStrategies(
+            newCustomSpawn("RunDynamic", ImmutableMap.of()), event -> {});
+
+    Optional<? extends SpawnStrategy> optionalContext =
+        dynamicStrategies.stream()
             .filter(
                 c -> c instanceof DynamicSpawnStrategy || c instanceof LegacyDynamicSpawnStrategy)
             .findAny();
@@ -655,7 +676,7 @@ public class DynamicSpawnStrategyTest {
     if (legacyBehavior) {
       // The legacy spawn scheduler does not implement cross-cancellations of the two parallel
       // branches so this test makes no sense in that case.
-      Logger.getLogger(DynamicSpawnStrategyTest.class.getName()).info("Skipping test");
+      logger.atInfo().log("Skipping test");
       return;
     }
 
@@ -690,7 +711,7 @@ public class DynamicSpawnStrategyTest {
               // for InterruptedException to propagate. Make sure that's the case here by checking
               // that we did indeed wait for the slow process.
               if (!slowCleanupFinished.get()) {
-                fail("Did not await for the other branch to do its cleanup");
+                fail("Did not await for the local branch to do its cleanup");
               }
             });
 
@@ -803,7 +824,7 @@ public class DynamicSpawnStrategyTest {
       // have strong reasons to believe that the races are due to inherent problems in these tests,
       // not in the actual DynamicSpawnScheduler implementation. So whatever. I'll revisit these
       // later as a new set of tests once I'm less tired^W^W^W the legacy spawn scheduler goes away.
-      Logger.getLogger(DynamicSpawnStrategyTest.class.getName()).info("Skipping test");
+      logger.atInfo().log("Skipping test");
       return;
     }
 
@@ -971,7 +992,7 @@ public class DynamicSpawnStrategyTest {
 
     Spawn spawn = newDynamicSpawn();
     Exception e = assertThrows(expectedException.getClass(), () -> strategyAndContext.exec(spawn));
-    assertThat(e).hasMessageThat().matches(expectedException.getMessage());
+    assertThat(e).hasMessageThat().contains(expectedException.getMessage());
 
     Spawn executedSpawn = localStrategy.getExecutedSpawn();
     executedSpawn = executedSpawn == null ? remoteStrategy.getExecutedSpawn() : executedSpawn;
@@ -995,7 +1016,9 @@ public class DynamicSpawnStrategyTest {
         };
 
     assertThatStrategyPropagatesException(
-        localExec, remoteExec, legacyBehavior ? new UserExecException(e) : e);
+        localExec,
+        remoteExec,
+        legacyBehavior ? new UserExecException(e, createFailureDetail("")) : e);
   }
 
   @Test
@@ -1013,7 +1036,16 @@ public class DynamicSpawnStrategyTest {
         };
 
     assertThatStrategyPropagatesException(
-        localExec, remoteExec, legacyBehavior ? new UserExecException(e) : e);
+        localExec,
+        remoteExec,
+        legacyBehavior ? new UserExecException(e, createFailureDetail("")) : e);
+  }
+
+  private static FailureDetail createFailureDetail(String message) {
+    return FailureDetail.newBuilder()
+        .setMessage(message)
+        .setDynamicExecution(DynamicExecution.newBuilder().setCode(Code.RUN_FAILURE))
+        .build();
   }
 
   @AutoValue

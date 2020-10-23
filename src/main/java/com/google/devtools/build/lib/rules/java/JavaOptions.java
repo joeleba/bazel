@@ -117,21 +117,9 @@ public class JavaOptions extends FragmentOptions {
   public Label hostJavaBase;
 
   @Option(
-      name = "incompatible_use_jdk11_as_host_javabase",
-      defaultValue = "true",
-      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      metadataTags = {
-        OptionMetadataTag.INCOMPATIBLE_CHANGE,
-        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
-      },
-      help = "If enabled, the default --host_javabase is JDK 11.")
-  public boolean useJDK11AsHostJavaBase;
-
-  @Option(
       name = "javacopt",
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help = "Additional options to pass to javac.")
@@ -140,7 +128,7 @@ public class JavaOptions extends FragmentOptions {
   @Option(
       name = "host_javacopt",
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help =
@@ -151,7 +139,7 @@ public class JavaOptions extends FragmentOptions {
   @Option(
       name = "jvmopt",
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help =
@@ -376,7 +364,7 @@ public class JavaOptions extends FragmentOptions {
   @Option(
       name = "extra_proguard_specs",
       allowMultiple = true,
-      defaultValue = "", // Ignored
+      defaultValue = "null",
       converter = LabelConverter.class,
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.UNKNOWN},
@@ -398,6 +386,18 @@ public class JavaOptions extends FragmentOptions {
       effectTags = {OptionEffectTag.UNKNOWN},
       help = "Do not use.")
   public Map<String, Label> bytecodeOptimizers;
+
+  /**
+   * If true, the OPTIMIZATION stage of the bytecode optimizer will be split across multiple
+   * actions.
+   */
+  @Option(
+      name = "split_bytecode_optimization_pass",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "Do not use.")
+  public boolean splitBytecodeOptimizationPass;
 
   @Option(
       name = "enforce_proguard_file_extension",
@@ -421,7 +421,7 @@ public class JavaOptions extends FragmentOptions {
 
   @Option(
       name = "message_translations",
-      defaultValue = "",
+      defaultValue = "null",
       allowMultiple = true,
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
@@ -431,7 +431,7 @@ public class JavaOptions extends FragmentOptions {
   @Option(
       name = "check_constraint",
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help = "Check the listed constraint.")
@@ -559,7 +559,7 @@ public class JavaOptions extends FragmentOptions {
       name = "plugin",
       converter = LabelListConverter.class,
       allowMultiple = true,
-      defaultValue = "",
+      defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help = "Plugins to use in the build. Currently works with java_plugin.")
@@ -622,6 +622,38 @@ public class JavaOptions extends FragmentOptions {
       help = "If enabled, turbine is used for all annotation processing")
   public boolean experimentalTurbineAnnotationProcessing;
 
+  @Option(
+      name = "java_runtime_version",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "The Java runtime version")
+  public String javaRuntimeVersion;
+
+  @Option(
+      name = "tool_java_runtime_version",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "The Java runtime version used to execute tools during the build")
+  public String hostJavaRuntimeVersion;
+
+  @Option(
+      name = "java_language_version",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "The Java language version")
+  public String javaLanguageVersion;
+
+  @Option(
+      name = "tool_java_language_version",
+      defaultValue = "",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help = "The Java language version used to build tools that are executed during a build")
+  public String hostJavaLanguageVersion;
+
   Label defaultJavaBase() {
     return Label.parseAbsoluteUnchecked(DEFAULT_JAVABASE);
   }
@@ -634,10 +666,7 @@ public class JavaOptions extends FragmentOptions {
   }
 
   Label defaultHostJavaBase() {
-    if (useJDK11AsHostJavaBase) {
-      return Label.parseAbsoluteUnchecked("@bazel_tools//tools/jdk:remote_jdk11");
-    }
-    return Label.parseAbsoluteUnchecked("@bazel_tools//tools/jdk:remote_jdk10");
+    return Label.parseAbsoluteUnchecked("@bazel_tools//tools/jdk:remote_jdk11");
   }
 
   Label defaultJavaToolchain() {
@@ -684,11 +713,23 @@ public class JavaOptions extends FragmentOptions {
     host.disallowResourceJars = disallowResourceJars;
     host.loadJavaRulesFromBzl = loadJavaRulesFromBzl;
 
+    host.javaRuntimeVersion = hostJavaRuntimeVersion;
+    host.javaLanguageVersion = hostJavaLanguageVersion;
+
+    host.bytecodeOptimizers = bytecodeOptimizers;
+    host.splitBytecodeOptimizationPass = splitBytecodeOptimizationPass;
+
+    host.enforceProguardFileExtension = enforceProguardFileExtension;
+    host.extraProguardSpecs = extraProguardSpecs;
+    host.proguard = proguard;
+
     // Save host options for further use.
     host.hostJavaBase = hostJavaBase;
     host.hostJavacOpts = hostJavacOpts;
     host.hostJavaLauncher = hostJavaLauncher;
     host.hostJavaToolchain = hostJavaToolchain;
+    host.hostJavaRuntimeVersion = hostJavaRuntimeVersion;
+    host.hostJavaLanguageVersion = hostJavaLanguageVersion;
 
     host.experimentalTurbineAnnotationProcessing = experimentalTurbineAnnotationProcessing;
 

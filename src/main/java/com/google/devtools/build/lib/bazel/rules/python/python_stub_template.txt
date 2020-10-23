@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 
+# This script must retain compatibility with a wide variety of Python versions
+# since it is run for every py_binary target. Currently we guarantee support
+# going back to Python 2.7, and try to support even Python 2.6 on a best-effort
+# basis. We might abandon 2.6 support once users have the ability to control the
+# above shebang string via the Python toolchain (#8685).
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -16,6 +22,7 @@ import os
 import re
 import shutil
 import subprocess
+import sysconfig
 import tempfile
 import zipfile
 
@@ -31,8 +38,8 @@ def GetWindowsPathWithUNCPrefix(path):
   path = path.strip()
 
   # No need to add prefix for non-Windows platforms.
-  # And \\?\ doesn't work in python 2
-  if not IsWindows() or sys.version_info[0] < 3:
+  # And \\?\ doesn't work in python 2 or on mingw
+  if not IsWindows() or sys.version_info[0] < 3 or sysconfig.get_platform() == 'mingw':
     return path
 
   # Lets start the unicode fun
@@ -147,6 +154,7 @@ def CreateModuleSpace():
 def GetRepositoriesImports(module_space, import_all):
   if import_all:
     repo_dirs = [os.path.join(module_space, d) for d in os.listdir(module_space)]
+    repo_dirs.sort()
     return [d for d in repo_dirs if os.path.isdir(d)]
   return [os.path.join(module_space, '%workspace_name%')]
 
@@ -261,6 +269,14 @@ https://github.com/bazelbuild/bazel/issues/7899 for more information.
 ----------------""".format(diagnostic=diagnostic)
   print(message, file=sys.stderr)
 
+def Deduplicate(items):
+  """Efficiently filter out duplicates, keeping the first element only."""
+  seen = set()
+  for it in items:
+      if it not in seen:
+          seen.add(it)
+          yield it
+
 def Main():
   args = sys.argv[1:]
 
@@ -274,8 +290,12 @@ def Main():
   python_imports = '%imports%'
   python_path_entries = CreatePythonPathEntries(python_imports, module_space)
   python_path_entries += GetRepositoriesImports(module_space, %import_all%)
-
-  python_path_entries = [GetWindowsPathWithUNCPrefix(d) for d in python_path_entries]
+  # Remove duplicates to avoid overly long PYTHONPATH (#10977). Preserve order,
+  # keep first occurrence only.
+  python_path_entries = [
+    GetWindowsPathWithUNCPrefix(d)
+    for d in Deduplicate(python_path_entries)
+  ]
 
   old_python_path = os.environ.get('PYTHONPATH')
   python_path = os.pathsep.join(python_path_entries)
