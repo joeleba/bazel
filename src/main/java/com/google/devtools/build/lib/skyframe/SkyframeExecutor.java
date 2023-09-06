@@ -1906,7 +1906,7 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     EvaluationResult<ActionLookupValue> result =
         memoizingEvaluator.evaluate(
             Iterables.concat(configuredTargetKeys, topLevelAspectKeys), evaluationContext);
-    syscallCache.noteAnalysisPhaseEnded();
+    // syscallCache.noteAnalysisPhaseEnded();
 
     var targetsWithConfiguration =
         ImmutableList.<TargetAndConfiguration>builderWithExpectedSize(configuredTargetKeys.size());
